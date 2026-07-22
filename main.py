@@ -537,13 +537,21 @@ async def message_handler(client, message):
             save_data(data)
         return
 
-# --- سيرفر الويب المدمج (لا يتطلب أي مكتبة خارجية) ---
+# --- سيرفر الويب المدمج (معدّل بدون أخطاء) ---
 async def handle_ping(reader, writer):
-    await reader.read(100)
-    response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 15\r\n\r\nBot is running!"
-    writer.write(response.encode())
-    await reader.drain()
-    writer.close()
+    try:
+        await reader.read(100)
+        response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 15\r\n\r\nBot is running!"
+        writer.write(response.encode())
+        await writer.drain()
+    except Exception:
+        pass
+    finally:
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
 
 async def main():
     # 1. تشغيل سيرفر الويب المدمج للاستجابة لفحص Render
@@ -563,4 +571,5 @@ async def main():
     await app.stop()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
