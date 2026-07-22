@@ -2,9 +2,26 @@ import os
 import json
 import asyncio
 from pyrogram import Client, filters, idle
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from pyrogram.errors import SessionPasswordNeeded, UserNotParticipant
 from pyrogram.enums import ChatMemberStatus
+
+# --- ترقيعة (Patch) لدعم الأزرار الملونة في Pyrogram ---
+old_init = InlineKeyboardButton.__init__
+def new_init(self, text, *args, style=None, **kwargs):
+    old_init(self, text, *args, **kwargs)
+    if style:
+        self.style = style
+InlineKeyboardButton.__init__ = new_init
+
+old_to_dict = InlineKeyboardButton.to_dict
+def new_to_dict(self):
+    d = old_to_dict(self)
+    if hasattr(self, 'style') and self.style:
+        d['style'] = self.style
+    return d
+InlineKeyboardButton.to_dict = new_to_dict
+# --------------------------------------------------
 
 # --- الإعدادات ---
 BOT_TOKEN = "8996776697:AAFquiMkylAqhbf_G5FbGYXSVnVa9LZ4k3A"
@@ -52,25 +69,26 @@ async def is_subscribed(client, user_id):
         print(f"Subscription check error: {e}")
         return True
 
+# --- القوائم مع تلوين الأزرار (primary للأزرق، danger للأحمر) ---
 def main_menu(is_admin_user=False):
     keyboard = [
-        [InlineKeyboardButton("👤 حساباتي", callback_data="show_accounts"), InlineKeyboardButton("➕ إضافة حساب", callback_data="add_account")],
-        [InlineKeyboardButton("👥 السوبرات", callback_data="show_groups"), InlineKeyboardButton("➕ إضافة سوبر", callback_data="add_group")],
-        [InlineKeyboardButton("⏱️ ضبط الوقت", callback_data="set_time"), InlineKeyboardButton("✉️ رسائل النشر", callback_data="show_texts")],
-        [InlineKeyboardButton("🔴 إيقاف النشر", callback_data="stop_pub"), InlineKeyboardButton("🟢 بدء النشر", callback_data="start_pub")],
+        [InlineKeyboardButton("➕ اضافة حساب", callback_data="add_account", style="primary"), InlineKeyboardButton("👤 حساباتي", callback_data="show_accounts")],
+        [InlineKeyboardButton("➕ اضافة سوبر", callback_data="add_group", style="primary"), InlineKeyboardButton("👥 السوبرات", callback_data="show_groups")],
+        [InlineKeyboardButton("✉️ رسائل النشر", callback_data="show_texts"), InlineKeyboardButton("⏱️ ضبط الوقت", callback_data="set_time")],
+        [InlineKeyboardButton("🟢 بدء النشر", callback_data="start_pub", style="primary"), InlineKeyboardButton("🔴 إيقاف النشر", callback_data="stop_pub", style="danger")],
         [InlineKeyboardButton("👑 المطور", url="https://t.me/scofr")]
     ]
     if is_admin_user:
-        keyboard.insert(0, [InlineKeyboardButton("🛠️ لوحة الأدمن الخاصة", callback_data="admin_panel")])
+        keyboard.insert(0, [InlineKeyboardButton("🛠️ لوحة تحكم المطور", callback_data="admin_panel", style="primary")])
     return InlineKeyboardMarkup(keyboard)
 
 def back_menu():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")]])
 
 def subscription_markup():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 اشترك في القناة", url="https://t.me/m_55wa")],
-        [InlineKeyboardButton("✅ لقد اشتركت، تحقق الآن", callback_data="check_subscription")]
+        [InlineKeyboardButton("📢 اشترك في القناة", url="https://t.me/m_55wa", style="primary")],
+        [InlineKeyboardButton("✅ لقد اشتركت، تحقق الآن", callback_data="check_subscription", style="primary")]
     ])
 
 # --- محرك النشر التلقائي في الخلفية ---
@@ -109,10 +127,9 @@ async def background_publisher():
 async def start_command(client, message):
     user_id = str(message.from_user.id)
     
-    # فحص الاشتراك الإجباري
     if not await is_subscribed(client, message.from_user.id):
         await message.reply_text(
-            "❌ **عذراً، يجب عليك الاشتراك في قناة البوت أولاً لتتمكن من استخدامه!**\n\nرابط القناة: https://t.me/m_55wa\n\nبعد الاشتراك، اضغط على زر التحقق بالأسفل 👇",
+            "❌ عذراً، يجب عليك الاشتراك في قناة البوت أولاً لتتمكن من استخدامه!\n\nرابط القناة: https://t.me/m_55wa\n\nبعد الاشتراك، اضغط على زر التحقق بالأسفل 👇",
             reply_markup=subscription_markup()
         )
         return
@@ -135,11 +152,8 @@ async def start_command(client, message):
     data[user_id]["state"] = None
     save_data(data)
     
-    welcome_template = data.get("_settings", {}).get("welcome_message", "أهلاً بك يا {name}، هذا بوت النشر التلقائي.")
+    welcome_template = data.get("_settings", {}).get("welcome_message", "أهلاً بك يا {name} في بوت النشر التلقائي.\n\nاستخدم الأزرار أدناه للتحكم بحساباتك، مجموعاتك، وإدارة عمليات النشر بكل سهولة.")
     welcome_text = welcome_template.replace("{name}", message.from_user.first_name)
-    
-    if admin_status:
-        welcome_text += "\n\n👑 أهلاً بك يا أدمن، تم التعرف على صلاحياتك الكاملة."
 
     await message.reply_text(welcome_text, reply_markup=main_menu(admin_status))
 
@@ -160,7 +174,7 @@ async def callback_handler(client, call):
         await call.answer("❌ يجب عليك الاشتراك في القناة أولاً!", show_alert=True)
         try:
             await call.message.edit_text(
-                "❌ **عذراً، يجب عليك الاشتراك في قناة البوت أولاً لتتمكن من استخدامه!**\n\nرابط القناة: https://t.me/m_55wa",
+                "❌ عذراً، يجب عليك الاشتراك في قناة البوت أولاً لتتمكن من استخدامه!\n\nرابط القناة: https://t.me/m_55wa",
                 reply_markup=subscription_markup()
             )
         except:
@@ -186,11 +200,12 @@ async def callback_handler(client, call):
             await call.answer("❌ عذراً، هذه اللوحة للمطور فقط!", show_alert=True)
             return
         admin_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📊 عدد الأعضاء", callback_data="admin_member_count"), InlineKeyboardButton("📢 إذاعة عامة", callback_data="admin_broadcast")],
-            [InlineKeyboardButton("🚫 حظر/إلغاء حظر عضو", callback_data="admin_ban_user"), InlineKeyboardButton("✏️ تعديل رسالة الترحيب", callback_data="admin_set_welcome")],
-            [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
+            [InlineKeyboardButton("📊 ادارة المشتركين", callback_data="admin_member_count", style="primary"), InlineKeyboardButton("📢 اذاعة عامة", callback_data="admin_broadcast", style="primary")],
+            [InlineKeyboardButton("🚫 حظر عضو", callback_data="admin_ban_user", style="danger"), InlineKeyboardButton("🟢 الغاء حظر", callback_data="admin_ban_user", style="primary")],
+            [InlineKeyboardButton("📢 الاشتراك الاجباري", callback_data="admin_set_welcome", style="primary"), InlineKeyboardButton("✏️ رسالة الترحيب", callback_data="admin_set_welcome", style="primary")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")]
         ])
-        await call.message.edit_text("👑 **مرحباً بك في لوحة تحكم الأدمن الخاصة:**", reply_markup=admin_kb)
+        await call.message.edit_text("👑 **لوحة تحكم المطور:**", reply_markup=admin_kb)
 
     elif call.data == "admin_member_count":
         if not admin_status:
@@ -214,43 +229,39 @@ async def callback_handler(client, call):
             return
         data[user_id]["state"] = "waiting_for_ban_user_id"
         save_data(data)
-        await call.message.edit_text("🚫 أرسل الآن **آيدي المستخدم (ID)** المراد حظره أو إلغاء حظره:", reply_markup=back_menu())
+        await call.message.edit_text("🚫 أرسل الآن آيدي المستخدم (ID) المراد حظره أو إلغاء حظره:", reply_markup=back_menu())
 
     elif call.data == "admin_set_welcome":
         if not admin_status:
             await call.answer("❌ غير مسموح!", show_alert=True)
             return
-        
         await call.answer()
-        
         settings = data.setdefault("_settings", {})
-        current_welcome = settings.get("welcome_message", "أهلاً بك يا {name}، هذا بوت النشر التلقائي.")
-        
+        current_welcome = settings.get("welcome_message", "أهلاً بك يا {name} في بوت النشر التلقائي.")
         data[user_id]["state"] = "waiting_for_new_welcome"
         save_data(data)
-        
         try:
             await call.message.edit_text(
                 f"✏️ رسالة الترحيب الحالية:\n{current_welcome}\n\nأرسل رسالة الترحيب الجديدة الآن (يمكنك استخدام {{name}} لاسم المستخدم):",
                 reply_markup=back_menu()
             )
         except Exception as e:
-            print(f"Error editing welcome message: {e}")
+            print(f"Error: {e}")
 
     elif call.data == "show_accounts":
         accs = data[user_id].get("accounts", [])
         if accs:
-            text = f"👤 **الحسابات المضافة:** (`{len(accs)}`)\n\n"
+            text = f"👤 الحسابات المضافة: (`{len(accs)}`)\n\n"
             for i, acc in enumerate(accs, 1):
                 text += f"{i}. {acc.get('first_name')} (@{acc.get('username', 'لا يوجد')})\n"
             keyboard = [
-                [InlineKeyboardButton("➕ إضافة حساب آخر", callback_data="add_account")],
-                [InlineKeyboardButton("🗑️ حذف جميع الحسابات", callback_data="clear_accounts")],
-                [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
+                [InlineKeyboardButton("➕ إضافة حساب آخر", callback_data="add_account", style="primary")],
+                [InlineKeyboardButton("🗑️ حذف جميع الحسابات", callback_data="clear_accounts", style="danger")],
+                [InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")]
             ]
             await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         else:
-            await call.message.edit_text("❌ ليس لديك أي حسابات مضافة.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ إضافة حساب", callback_data="add_account")], [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]]))
+            await call.message.edit_text("❌ ليس لديك أي حسابات مضافة.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ اضافة حساب", callback_data="add_account", style="primary")], [InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")]]))
             
     elif call.data == "add_account":
         data[user_id]["state"] = "waiting_for_phone"
@@ -264,13 +275,13 @@ async def callback_handler(client, call):
 
     elif call.data == "show_groups":
         groups = data[user_id].get("groups", [])
-        text = f"👥 **السوبرات والمجموعات المضافة:** (`{len(groups)}`)\n\n"
+        text = f"👥 السوبرات والمجموعات المضافة: (`{len(groups)}`)\n\n"
         for i, g in enumerate(groups, 1):
             text += f"{i}. `{g}`\n"
         keyboard = [
-            [InlineKeyboardButton("➕ إضافة سوبر", callback_data="add_group")],
-            [InlineKeyboardButton("🗑️ تفريغ السوبرات", callback_data="clear_groups")],
-            [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
+            [InlineKeyboardButton("➕ اضافة سوبر", callback_data="add_group", style="primary")],
+            [InlineKeyboardButton("🗑️ تفريغ السوبرات", callback_data="clear_groups", style="danger")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")]
         ]
         await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -286,14 +297,14 @@ async def callback_handler(client, call):
 
     elif call.data == "show_texts":
         texts = data[user_id].get("texts", [])
-        text = f"✉️ **رسائل النشر المحفوظة:** (`{len(texts)}`)\n\n"
+        text = f"✉️ رسائل النشر المحفوظة: (`{len(texts)}`)\n\n"
         for i, t in enumerate(texts, 1):
             preview = t[:40] + "..." if len(t) > 40 else t
             text += f"{i}. {preview}\n"
         keyboard = [
-            [InlineKeyboardButton("➕ إضافة رسالة جديدة", callback_data="add_text")],
-            [InlineKeyboardButton("🗑️ حذف جميع الرسائل", callback_data="clear_texts")],
-            [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
+            [InlineKeyboardButton("➕ إضافة رسالة جديدة", callback_data="add_text", style="primary")],
+            [InlineKeyboardButton("🗑️ حذف جميع الرسائل", callback_data="clear_texts", style="danger")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")]
         ]
         await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -334,10 +345,9 @@ async def callback_handler(client, call):
 async def message_handler(client, message):
     user_id = str(message.from_user.id)
     
-    # فحص الاشتراك الإجباري
     if not await is_subscribed(client, message.from_user.id):
         await message.reply_text(
-            "❌ **عذراً، يجب عليك الاشتراك في قناة البوت أولاً لتتمكن من استخدامه!**\n\nرابط القناة: https://t.me/m_55wa\n\nبعد الاشتراك، اضغط على زر التحقق بالأسفل 👇",
+            "❌ عذراً، يجب عليك الاشتراك في قناة البوت أولاً لتتمكن من استخدامه!\n\nرابط القناة: https://t.me/m_55wa",
             reply_markup=subscription_markup()
         )
         return
@@ -355,15 +365,11 @@ async def message_handler(client, message):
         return
 
     if state == "waiting_for_admin_broadcast":
-        if not admin_status:
-            return
+        if not admin_status: return
         data[user_id]["state"] = None
         save_data(data)
-        
-        success = 0
-        failed = 0
+        success, failed = 0, 0
         status_msg = await message.reply_text("⏳ جاري بدء الإذاعة لجميع المشتركين...")
-        
         all_users = load_data()
         for target_id in all_users:
             if target_id == "_settings": continue
@@ -373,34 +379,25 @@ async def message_handler(client, message):
                 await asyncio.sleep(0.1)
             except Exception:
                 failed += 1
-        
-        await status_msg.edit_text(
-            f"✅ تمت الإذاعة بنجاح! 🚀\n\n- تم الإرسال إلى: {success} مستخدم\n- فشل الإرسال لـ: {failed} مستخدم",
-            reply_markup=main_menu(admin_status)
-        )
+        await status_msg.edit_text(f"✅ تمت الإذاعة بنجاح!\n- تم الإرسال إلى: {success}\n- فشل: {failed}", reply_markup=main_menu(admin_status))
         return
 
     elif state == "waiting_for_ban_user_id":
-        if not admin_status:
-            return
+        if not admin_status: return
         target_id = message.text.strip()
         data[user_id]["state"] = None
-        
         if target_id not in data:
             data[target_id] = {"groups": [], "delay": 120, "active": False, "accounts": [], "texts": [], "state": None, "banned": False}
-        
         current_status = data[target_id].get("banned", False)
         new_status = not current_status
         data[target_id]["banned"] = new_status
         save_data(data)
-        
-        msg_result = f"🚫 تم حظر المستخدم (`{target_id}`) بنجاح." if new_status else f"🟢 تم إلغاء حظر المستخدم (`{target_id}`) بنجاح."
+        msg_result = f"🚫 تم حظر المستخدم (`{target_id}`)." if new_status else f"🟢 تم إلغاء حظر المستخدم (`{target_id}`)."
         await message.reply_text(msg_result, reply_markup=main_menu(admin_status))
         return
 
     elif state == "waiting_for_new_welcome":
-        if not admin_status:
-            return
+        if not admin_status: return
         if "_settings" not in data: data["_settings"] = {}
         data["_settings"]["welcome_message"] = message.text
         data[user_id]["state"] = None
@@ -416,7 +413,7 @@ async def message_handler(client, message):
             login_attempts[user_id] = {"client": temp_client, "phone": message.text, "hash": code_info.phone_code_hash}
             data[user_id]["state"] = "waiting_for_otp"
             save_data(data)
-            await message.reply_text("📥 تم إرسال كود التحقق من تيليجرام. **أرسل الكود هنا الآن:**")
+            await message.reply_text("📥 تم إرسال كود التحقق من تيليجرام. أرسل الكود هنا الآن:")
         except Exception as e:
             await message.reply_text(f"❌ حدث خطأ في رقم الهاتف: {e}")
             data[user_id]["state"] = None
@@ -426,7 +423,7 @@ async def message_handler(client, message):
     elif state == "waiting_for_otp":
         attempt = login_attempts.get(user_id)
         if not attempt:
-            await message.reply_text("❌ انتهت الجلسة، الرجاء إعادة إرسال رقم الهاتف من لوحة التحكم.")
+            await message.reply_text("❌ انتهت الجلسة، أعد إرسال رقم الهاتف.")
             data[user_id]["state"] = None
             save_data(data)
             return
@@ -434,28 +431,20 @@ async def message_handler(client, message):
             await attempt["client"].sign_in(attempt["phone"], attempt["hash"], message.text)
             me = await attempt["client"].get_me()
             session_str = await attempt["client"].export_session_string()
-            
-            account_info = {
-                "session_string": session_str,
-                "id": me.id,
-                "username": me.username if me.username else "لا يوجد",
-                "first_name": me.first_name
-            }
-            
+            account_info = {"session_string": session_str, "id": me.id, "username": me.username if me.username else "لا يوجد", "first_name": me.first_name}
             if "accounts" not in data[user_id]: data[user_id]["accounts"] = []
             data[user_id]["accounts"].append(account_info)
             await attempt["client"].disconnect()
             del login_attempts[user_id]
             data[user_id]["state"] = None
             save_data(data)
-            await message.reply_text("✅ تم ربط الحساب بنجاح وإضافته لقائمتك!", reply_markup=main_menu(admin_status))
-            
+            await message.reply_text("✅ تم ربط الحساب بنجاح!", reply_markup=main_menu(admin_status))
         except SessionPasswordNeeded:
             data[user_id]["state"] = "waiting_for_password"
             save_data(data)
-            await message.reply_text("🔐 هذا الحساب محمي بكلمة مرور (التحقق بخطوتين). **أرسل كلمة المرور الآن:**")
+            await message.reply_text("🔐 الحساب محمي بكلمة مرور. أرسلها الآن:")
         except Exception as e:
-            await message.reply_text(f"❌ حدث خطأ في الكود: {e}\n(تأكد من صحة الكود وأنه حديث).")
+            await message.reply_text(f"❌ حدث خطأ في الكود: {e}")
             data[user_id]["state"] = None
             save_data(data)
         return
@@ -463,7 +452,7 @@ async def message_handler(client, message):
     elif state == "waiting_for_password":
         attempt = login_attempts.get(user_id)
         if not attempt:
-            await message.reply_text("❌ انتهت الجلسة، الرجاء إعادة إرسال رقم الهاتف.")
+            await message.reply_text("❌ انتهت الجلسة.")
             data[user_id]["state"] = None
             save_data(data)
             return
@@ -471,22 +460,14 @@ async def message_handler(client, message):
             await attempt["client"].check_password(message.text)
             me = await attempt["client"].get_me()
             session_str = await attempt["client"].export_session_string()
-            
-            account_info = {
-                "session_string": session_str,
-                "id": me.id,
-                "username": me.username if me.username else "لا يوجد",
-                "first_name": me.first_name
-            }
-            
+            account_info = {"session_string": session_str, "id": me.id, "username": me.username if me.username else "لا يوجد", "first_name": me.first_name}
             if "accounts" not in data[user_id]: data[user_id]["accounts"] = []
             data[user_id]["accounts"].append(account_info)
             await attempt["client"].disconnect()
             del login_attempts[user_id]
             data[user_id]["state"] = None
             save_data(data)
-            await message.reply_text("✅ تم التحقق من كلمة المرور وربط الحساب بنجاح!", reply_markup=main_menu(admin_status))
-            
+            await message.reply_text("✅ تم ربط الحساب بنجاح!", reply_markup=main_menu(admin_status))
         except Exception as e:
             await message.reply_text(f"❌ كلمة المرور غير صحيحة: {e}")
             data[user_id]["state"] = None
@@ -500,7 +481,6 @@ async def message_handler(client, message):
                 group_input = "@" + group_input.split("t.me/")[-1].strip("/")
             elif not group_input.startswith("@"):
                 group_input = "@" + group_input
-                
             if "groups" not in data[user_id]: data[user_id]["groups"] = []
             data[user_id]["groups"].append(group_input)
             data[user_id]["state"] = None
@@ -518,7 +498,7 @@ async def message_handler(client, message):
             data[user_id]["texts"].append(message.text)
             data[user_id]["state"] = None
             save_data(data)
-            await message.reply_text("✅ تم حفظ وإضافة الرسالة بنجاح.", reply_markup=main_menu(admin_status))
+            await message.reply_text("✅ تم حفظ الرسالة بنجاح.", reply_markup=main_menu(admin_status))
         except Exception as e:
             await message.reply_text(f"❌ حدث خطأ: {e}")
             data[user_id]["state"] = None
@@ -530,14 +510,14 @@ async def message_handler(client, message):
             data[user_id]["delay"] = int(message.text)
             data[user_id]["state"] = None
             save_data(data)
-            await message.reply_text("✅ تم ضبط وقت النشر بنجاح.", reply_markup=main_menu(admin_status))
+            await message.reply_text("✅ تم ضبط الوقت بنجاح.", reply_markup=main_menu(admin_status))
         except Exception as e:
-            await message.reply_text(f"❌ يجب إدخال رقم صحيح بالثواني: {e}")
+            await message.reply_text(f"❌ أخلِق رقماً صحيحاً بالثواني: {e}")
             data[user_id]["state"] = None
             save_data(data)
         return
 
-# --- سيرفر الويب المدمج (معدّل بدون أخطاء) ---
+# --- سيرفر الويب المدمج ---
 async def handle_ping(reader, writer):
     try:
         await reader.read(100)
@@ -554,19 +534,15 @@ async def handle_ping(reader, writer):
             pass
 
 async def main():
-    # 1. تشغيل سيرفر الويب المدمج للاستجابة لفحص Render
     port = int(os.environ.get("PORT", 8080))
     server = await asyncio.start_server(handle_ping, '0.0.0.0', port)
     print(f"Web server started on port {port}")
 
-    # 2. تشغيل مهمة النشر التلقائي
     asyncio.create_task(background_publisher())
 
-    # 3. تشغيل بوت تيليجرام
     await app.start()
     print("البوت يعمل الآن بنجاح...")
 
-    # 4. إبقاء البوت شغالاً دون توقف
     await idle()
     await app.stop()
 
