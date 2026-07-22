@@ -1,7 +1,6 @@
 import os
 import json
 import asyncio
-from aiohttp import web
 from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import SessionPasswordNeeded, UserNotParticipant
@@ -51,7 +50,7 @@ async def is_subscribed(client, user_id):
         return False
     except Exception as e:
         print(f"Subscription check error: {e}")
-        return True # السماح في حال وجود خطأ تقني مؤقت لضمان عدم توقف البوت
+        return True
 
 def main_menu(is_admin_user=False):
     keyboard = [
@@ -538,19 +537,18 @@ async def message_handler(client, message):
             save_data(data)
         return
 
-# --- سيرفر الويب المصغر للرد على Render و UptimeRobot ---
-async def handle_ping(request):
-    return web.Response(text="Bot is running!")
+# --- سيرفر الويب المدمج (لا يتطلب أي مكتبة خارجية) ---
+async def handle_ping(reader, writer):
+    await reader.read(100)
+    response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 15\r\n\r\nBot is running!"
+    writer.write(response.encode())
+    await writer.drain()
+    writer.close()
 
 async def main():
-    # 1. تشغيل سيرفر الويب المدمج لربط المنفذ بـ Render
-    server = web.Application()
-    server.router.add_get('/', handle_ping)
-    runner = web.AppRunner(server)
-    await runner.setup()
+    # 1. تشغيل سيرفر الويب المدمج للاستجابة لفحص Render
     port = int(os.environ.get("PORT", 8080))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
+    server = await asyncio.start_server(handle_ping, '0.0.0.0', port)
     print(f"Web server started on port {port}")
 
     # 2. تشغيل مهمة النشر التلقائي
