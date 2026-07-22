@@ -13,7 +13,7 @@ API_HASH = "0adc25ac386d50e8ee9f3b987863c4c0"
 ADMIN_USERNAME = "scofr"
 REQUIRED_CHANNEL = "@m_55wa"  # قناة الاشتراك الإجباري
 
-app = Client("publisher_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+app = Client("publisher_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
 DATA_FILE = "users_config.json"
 login_attempts = {}
 
@@ -410,7 +410,7 @@ async def message_handler(client, message):
 
     elif state == "waiting_for_phone":
         try:
-            temp_client = Client(f"session_{user_id}_{message.text}", api_id=API_ID, api_hash=API_HASH)
+            temp_client = Client(f"session_{user_id}_{message.text}", api_id=API_ID, api_hash=API_HASH, in_memory=True)
             await temp_client.connect()
             code_info = await temp_client.send_code(message.text)
             login_attempts[user_id] = {"client": temp_client, "phone": message.text, "hash": code_info.phone_code_hash}
@@ -542,7 +542,7 @@ async def handle_ping(reader, writer):
     await reader.read(100)
     response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 15\r\n\r\nBot is running!"
     writer.write(response.encode())
-    await writer.drain()
+    await reader.drain()
     writer.close()
 
 async def main():
