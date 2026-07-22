@@ -2,26 +2,9 @@ import os
 import json
 import asyncio
 from pyrogram import Client, filters, idle
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import SessionPasswordNeeded, UserNotParticipant
 from pyrogram.enums import ChatMemberStatus
-
-# --- ترقيعة (Patch) لدعم الأزرار الملونة في Pyrogram ---
-old_init = InlineKeyboardButton.__init__
-def new_init(self, text, *args, style=None, **kwargs):
-    old_init(self, text, *args, **kwargs)
-    if style:
-        self.style = style
-InlineKeyboardButton.__init__ = new_init
-
-old_to_dict = InlineKeyboardButton.to_dict
-def new_to_dict(self):
-    d = old_to_dict(self)
-    if hasattr(self, 'style') and self.style:
-        d['style'] = self.style
-    return d
-InlineKeyboardButton.to_dict = new_to_dict
-# --------------------------------------------------
 
 # --- الإعدادات ---
 BOT_TOKEN = "8996776697:AAFquiMkylAqhbf_G5FbGYXSVnVa9LZ4k3A"
@@ -69,26 +52,26 @@ async def is_subscribed(client, user_id):
         print(f"Subscription check error: {e}")
         return True
 
-# --- القوائم مع تلوين الأزرار (primary للأزرق، danger للأحمر) ---
+# --- القوائم الرئيسية ---
 def main_menu(is_admin_user=False):
     keyboard = [
-        [InlineKeyboardButton("➕ اضافة حساب", callback_data="add_account", style="primary"), InlineKeyboardButton("👤 حساباتي", callback_data="show_accounts")],
-        [InlineKeyboardButton("➕ اضافة سوبر", callback_data="add_group", style="primary"), InlineKeyboardButton("👥 السوبرات", callback_data="show_groups")],
+        [InlineKeyboardButton("➕ إضافة حساب", callback_data="add_account"), InlineKeyboardButton("👤 حساباتي", callback_data="show_accounts")],
+        [InlineKeyboardButton("➕ إضافة سوبر", callback_data="add_group"), InlineKeyboardButton("👥 السوبرات", callback_data="show_groups")],
         [InlineKeyboardButton("✉️ رسائل النشر", callback_data="show_texts"), InlineKeyboardButton("⏱️ ضبط الوقت", callback_data="set_time")],
-        [InlineKeyboardButton("🟢 بدء النشر", callback_data="start_pub", style="primary"), InlineKeyboardButton("🔴 إيقاف النشر", callback_data="stop_pub", style="danger")],
+        [InlineKeyboardButton("🟢 بدء النشر", callback_data="start_pub"), InlineKeyboardButton("🔴 إيقاف النشر", callback_data="stop_pub")],
         [InlineKeyboardButton("👑 المطور", url="https://t.me/scofr")]
     ]
     if is_admin_user:
-        keyboard.insert(0, [InlineKeyboardButton("🛠️ لوحة تحكم المطور", callback_data="admin_panel", style="primary")])
+        keyboard.insert(0, [InlineKeyboardButton("🛠️ لوحة تحكم المطور", callback_data="admin_panel")])
     return InlineKeyboardMarkup(keyboard)
 
 def back_menu():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]])
 
 def subscription_markup():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 اشترك في القناة", url="https://t.me/m_55wa", style="primary")],
-        [InlineKeyboardButton("✅ لقد اشتركت، تحقق الآن", callback_data="check_subscription", style="primary")]
+        [InlineKeyboardButton("📢 اشترك في القناة", url="https://t.me/m_55wa")],
+        [InlineKeyboardButton("✅ لقد اشتركت، تحقق الآن", callback_data="check_subscription")]
     ])
 
 # --- محرك النشر التلقائي في الخلفية ---
@@ -200,12 +183,12 @@ async def callback_handler(client, call):
             await call.answer("❌ عذراً، هذه اللوحة للمطور فقط!", show_alert=True)
             return
         admin_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📊 ادارة المشتركين", callback_data="admin_member_count", style="primary"), InlineKeyboardButton("📢 اذاعة عامة", callback_data="admin_broadcast", style="primary")],
-            [InlineKeyboardButton("🚫 حظر عضو", callback_data="admin_ban_user", style="danger"), InlineKeyboardButton("🟢 الغاء حظر", callback_data="admin_ban_user", style="primary")],
-            [InlineKeyboardButton("📢 الاشتراك الاجباري", callback_data="admin_set_welcome", style="primary"), InlineKeyboardButton("✏️ رسالة الترحيب", callback_data="admin_set_welcome", style="primary")],
-            [InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")]
+            [InlineKeyboardButton("📊 إدارة المشتركين", callback_data="admin_member_count"), InlineKeyboardButton("📢 إذاعة عامة", callback_data="admin_broadcast")],
+            [InlineKeyboardButton("🚫 حظر/إلغاء حظر عضو", callback_data="admin_ban_user")],
+            [InlineKeyboardButton("✏️ تعديل رسالة الترحيب", callback_data="admin_set_welcome")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
         ])
-        await call.message.edit_text("👑 **لوحة تحكم المطور:**", reply_markup=admin_kb)
+        await call.message.edit_text("👑 **مرحباً بك في لوحة تحكم الأدمن الخاصة:**", reply_markup=admin_kb)
 
     elif call.data == "admin_member_count":
         if not admin_status:
@@ -255,13 +238,13 @@ async def callback_handler(client, call):
             for i, acc in enumerate(accs, 1):
                 text += f"{i}. {acc.get('first_name')} (@{acc.get('username', 'لا يوجد')})\n"
             keyboard = [
-                [InlineKeyboardButton("➕ إضافة حساب آخر", callback_data="add_account", style="primary")],
-                [InlineKeyboardButton("🗑️ حذف جميع الحسابات", callback_data="clear_accounts", style="danger")],
-                [InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")]
+                [InlineKeyboardButton("➕ إضافة حساب آخر", callback_data="add_account")],
+                [InlineKeyboardButton("🗑️ حذف جميع الحسابات", callback_data="clear_accounts")],
+                [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
             ]
             await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         else:
-            await call.message.edit_text("❌ ليس لديك أي حسابات مضافة.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ اضافة حساب", callback_data="add_account", style="primary")], [InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")]]))
+            await call.message.edit_text("❌ ليس لديك أي حسابات مضافة.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ إضافة حساب", callback_data="add_account")], [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]]))
             
     elif call.data == "add_account":
         data[user_id]["state"] = "waiting_for_phone"
@@ -279,9 +262,9 @@ async def callback_handler(client, call):
         for i, g in enumerate(groups, 1):
             text += f"{i}. `{g}`\n"
         keyboard = [
-            [InlineKeyboardButton("➕ اضافة سوبر", callback_data="add_group", style="primary")],
-            [InlineKeyboardButton("🗑️ تفريغ السوبرات", callback_data="clear_groups", style="danger")],
-            [InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")]
+            [InlineKeyboardButton("➕ إضافة سوبر", callback_data="add_group")],
+            [InlineKeyboardButton("🗑️ تفريغ السوبرات", callback_data="clear_groups")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
         ]
         await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -302,9 +285,9 @@ async def callback_handler(client, call):
             preview = t[:40] + "..." if len(t) > 40 else t
             text += f"{i}. {preview}\n"
         keyboard = [
-            [InlineKeyboardButton("➕ إضافة رسالة جديدة", callback_data="add_text", style="primary")],
-            [InlineKeyboardButton("🗑️ حذف جميع الرسائل", callback_data="clear_texts", style="danger")],
-            [InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")]
+            [InlineKeyboardButton("➕ إضافة رسالة جديدة", callback_data="add_text")],
+            [InlineKeyboardButton("🗑️ حذف جميع الرسائل", callback_data="clear_texts")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
         ]
         await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -517,7 +500,7 @@ async def message_handler(client, message):
             save_data(data)
         return
 
-# --- سيرفر الويب المدمج ---
+# --- سيرفر الويب المدمج (تنبيه Render / UptimeRobot) ---
 async def handle_ping(reader, writer):
     try:
         await reader.read(100)
