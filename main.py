@@ -1,7 +1,8 @@
 import os
 import json
 import asyncio
-from pyrogram import Client, filters
+from aiohttp import web
+from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import SessionPasswordNeeded, UserNotParticipant
 from pyrogram.enums import ChatMemberStatus
@@ -16,7 +17,6 @@ REQUIRED_CHANNEL = "@m_55wa"  # قناة الاشتراك الإجباري
 app = Client("publisher_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 DATA_FILE = "users_config.json"
 login_attempts = {}
-background_task_started = False
 
 def load_data():
     if not os.path.exists(DATA_FILE): return {}
@@ -108,11 +108,6 @@ async def background_publisher():
 
 @app.on_message(filters.command("start"))
 async def start_command(client, message):
-    global background_task_started
-    if not background_task_started:
-        asyncio.create_task(background_publisher())
-        background_task_started = True
-
     user_id = str(message.from_user.id)
     
     # فحص الاشتراك الإجباري
@@ -543,5 +538,31 @@ async def message_handler(client, message):
             save_data(data)
         return
 
-print("البوت يعمل الآن...")
-app.run()
+# --- سيرفر الويب المصغر للرد على Render و UptimeRobot ---
+async def handle_ping(request):
+    return web.Response(text="Bot is running!")
+
+async def main():
+    # 1. تشغيل سيرفر الويب المدمج لربط المنفذ بـ Render
+    server = web.Application()
+    server.router.add_get('/', handle_ping)
+    runner = web.AppRunner(server)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"Web server started on port {port}")
+
+    # 2. تشغيل مهمة النشر التلقائي
+    asyncio.create_task(background_publisher())
+
+    # 3. تشغيل بوت تيليجرام
+    await app.start()
+    print("البوت يعمل الآن بنجاح...")
+
+    # 4. إبقاء البوت شغالاً دون توقف
+    await idle()
+    await app.stop()
+
+if __name__ == "__main__":
+    asyncio.run(main())
