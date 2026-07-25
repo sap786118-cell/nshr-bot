@@ -1,4 +1,4 @@
-import os
+hereimport os
 import json
 import asyncio
 from pyrogram import Client, filters, idle
@@ -74,7 +74,7 @@ def subscription_markup():
         [InlineKeyboardButton("✅ لقد اشتركت، تحقق الآن", callback_data="check_subscription")]
     ])
 
-# --- محرك النشر التلقائي في الخلفية ---
+# --- محرك النشر التلقائي في الخلفية (يدعم النصوص والوسائط) ---
 async def background_publisher():
     while True:
         await asyncio.sleep(10)
@@ -93,9 +93,16 @@ async def background_publisher():
                         try:
                             async with Client(f"worker_{user_id}_{acc.get('id')}", api_id=API_ID, api_hash=API_HASH, session_string=session_str, in_memory=True) as user_client:
                                 for group in groups:
-                                    for text in texts:
+                                    for item in texts:
                                         try:
-                                            await user_client.send_message(group, text)
+                                            if isinstance(item, dict):
+                                                if item.get("type") == "photo":
+                                                    await user_client.send_photo(group, item.get("file_id"), caption=item.get("caption", ""))
+                                                else:
+                                                    await user_client.send_message(group, item.get("content", ""))
+                                            else:
+                                                # دعم النسخة القديمة إن وجدت
+                                                await user_client.send_message(group, item)
                                             await asyncio.sleep(3)
                                         except Exception as grp_err:
                                             print(f"فشل النشر في المجموعات: {grp_err}")
@@ -280,12 +287,22 @@ async def callback_handler(client, call):
 
     elif call.data == "show_texts":
         texts = data[user_id].get("texts", [])
-        text = f"✉️ رسائل النشر المحفوظة: (`{len(texts)}`)\n\n"
+        text = f"✉️ رسائل وميديا النشر المحفوظة: (`{len(texts)}`)\n\n"
         for i, t in enumerate(texts, 1):
-            preview = t[:40] + "..." if len(t) > 40 else t
-            text += f"{i}. {preview}\n"
+            if isinstance(t, dict):
+                if t.get("type") == "photo":
+                    cap = t.get("caption", "بدون وصف")
+                    preview = cap[:30] + "..." if len(cap) > 30 else cap
+                    text += f"{i}. 🖼️ [صورة] {preview}\n"
+                else:
+                    content = t.get("content", "")
+                    preview = content[:40] + "..." if len(content) > 40 else content
+                    text += f"{i}. 📝 {preview}\n"
+            else:
+                preview = t[:40] + "..." if len(t) > 40 else t
+                text += f"{i}. 📝 {preview}\n"
         keyboard = [
-            [InlineKeyboardButton("➕ إضافة رسالة جديدة", callback_data="add_text")],
+            [InlineKeyboardButton("➕ إضافة رسالة أو صورة جديدة", callback_data="add_text")],
             [InlineKeyboardButton("🗑️ حذف جميع الرسائل", callback_data="clear_texts")],
             [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
         ]
@@ -294,12 +311,12 @@ async def callback_handler(client, call):
     elif call.data == "add_text":
         data[user_id]["state"] = "waiting_for_text"
         save_data(data)
-        await call.message.edit_text("✍️ أرسل نص رسالة النشر الجديدة:", reply_markup=back_menu())
+        await call.message.edit_text("✍️ أرسل الآن **نص** أو **صورة** (مع الوصف إن أردت) لتكون ضمن رسائل النشر:", reply_markup=back_menu())
         
     elif call.data == "clear_texts":
         data[user_id]["texts"] = []
         save_data(data)
-        await call.message.edit_text("🗑️ تم حذف جميع الرسائل.", reply_markup=back_menu())
+        await call.message.edit_text("🗑️ تم حذف جميع الرسائل والصور.", reply_markup=back_menu())
 
     elif call.data == "set_time":
         data[user_id]["state"] = "waiting_for_time"
@@ -308,7 +325,7 @@ async def callback_handler(client, call):
         
     elif call.data == "start_pub":
         if not data[user_id].get("accounts") or not data[user_id].get("texts") or not data[user_id].get("groups"):
-            await call.answer("❌ يجب إضافة حساب، ورسالة، ومجموعة واحدة على الأقل أولاً!", show_alert=True)
+            await call.answer("❌ يجب إضافة حساب، ورسالة أو صورة، ومجموعة واحدة على الأقل أولاً!", show_alert=True)
         else:
             data[user_id]["active"] = True
             save_data(data)
@@ -343,9 +360,6 @@ async def message_handler(client, message):
 
     if user_id not in data or not data[user_id].get("state"): return
     state = data[user_id]["state"]
-
-    if not message.text:
-        return
 
     if state == "waiting_for_admin_broadcast":
         if not admin_status: return
@@ -478,10 +492,22 @@ async def message_handler(client, message):
     elif state == "waiting_for_text":
         try:
             if "texts" not in data[user_id]: data[user_id]["texts"] = []
-            data[user_id]["texts"].append(message.text)
+            
+            if message.photo:
+                file_id = message.photo.file_id
+                caption = message.caption or ""
+                data[user_id]["texts"].append({"type": "photo", "file_id": file_id, "caption": caption})
+                reply_text = "✅ تم حفظ الصورة مع الوصف بنجاح."
+            elif message.text:
+                data[user_id]["texts"].append({"type": "text", "content": message.text})
+                reply_text = "✅ تم حفظ النص بنجاح."
+            else:
+                await message.reply_text("❌ أرسل نصاً أو صورة صحيحة من فضلك.")
+                return
+
             data[user_id]["state"] = None
             save_data(data)
-            await message.reply_text("✅ تم حفظ الرسالة بنجاح.", reply_markup=main_menu(admin_status))
+            await message.reply_text(reply_text, reply_markup=main_menu(admin_status))
         except Exception as e:
             await message.reply_text(f"❌ حدث خطأ: {e}")
             data[user_id]["state"] = None
@@ -495,7 +521,7 @@ async def message_handler(client, message):
             save_data(data)
             await message.reply_text("✅ تم ضبط الوقت بنجاح.", reply_markup=main_menu(admin_status))
         except Exception as e:
-            await message.reply_text(f"❌ أخلِق رقماً صحيحاً بالثواني: {e}")
+            await message.reply_text(f"❌ أدخل رقماً صحيحاً بالثواني: {e}")
             data[user_id]["state"] = None
             save_data(data)
         return
