@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import random
 from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import SessionPasswordNeeded, UserNotParticipant
@@ -28,6 +29,8 @@ def load_data():
                     if "accounts" not in udata: udata["accounts"] = []
                     if "texts" not in udata: udata["texts"] = []
                     if "groups" not in udata: udata["groups"] = []
+                    if "paused_groups" not in udata: udata["paused_groups"] = []
+                    if "stats" not in udata: udata["stats"] = {"success": 0, "failed": 0}
                     if "banned" not in udata: udata["banned"] = False
             return data
         except:
@@ -56,6 +59,7 @@ def main_menu(is_admin_user=False):
     keyboard = [
         [InlineKeyboardButton("👤 حساباتي", callback_data="show_accounts"), InlineKeyboardButton("➕ إضافة حساب", callback_data="add_account")],
         [InlineKeyboardButton("👥 السوبرات", callback_data="show_groups"), InlineKeyboardButton("➕ إضافة سوبر", callback_data="add_group")],
+        [InlineKeyboardButton("⏸️ المجموعات المؤقتة", callback_data="show_paused_groups"), InlineKeyboardButton("📊 الإحصائيات", callback_data="show_stats")],
         [InlineKeyboardButton("⏱️ ضبط الوقت", callback_data="set_time"), InlineKeyboardButton("✉️ رسائل النشر", callback_data="show_texts")],
         [InlineKeyboardButton("🔴 إيقاف النشر", callback_data="stop_pub"), InlineKeyboardButton("🟢 بدء النشر", callback_data="start_pub")],
         [InlineKeyboardButton("👑 المطور", url="https://t.me/scofr")]
@@ -73,7 +77,7 @@ def subscription_markup():
         [InlineKeyboardButton("✅ لقد اشتركت، تحقق الآن", callback_data="check_subscription")]
     ])
 
-# --- محرك النشر التلقائي في الخلفية ---
+# --- محرك النشر الذكي في الخلفية (يدعم الوسائط والتأخير العشوائي والإحصائيات) ---
 async def background_publisher():
     while True:
         await asyncio.sleep(10)
@@ -86,22 +90,49 @@ async def background_publisher():
                     accounts = u_data.get("accounts")
                     texts = u_data.get("texts")
                     groups = u_data.get("groups")
+                    paused_groups = u_data.get("paused_groups", [])
                     
                     for acc in accounts:
                         session_str = acc.get("session_string")
                         try:
                             async with Client(f"worker_{user_id}_{acc.get('id')}", api_id=API_ID, api_hash=API_HASH, session_string=session_str, in_memory=True) as user_client:
                                 for group in groups:
-                                    for text in texts:
+                                    if group in paused_groups:
+                                        continue
+                                    for t_item in texts:
                                         try:
-                                            await user_client.send_message(group, text)
+                                            # التعامل مع النصوص أو الوسائط (صور / فيديوهات)
+                                            if isinstance(t_item, str):
+                                                await user_client.send_message(group, t_item)
+                                            else:
+                                                m_type = t_item.get("type")
+                                                if m_type == "text":
+                                                    await user_client.send_message(group, t_item.get("content"))
+                                                elif m_type == "photo":
+                                                    await user_client.send_photo(group, t_item.get("file_id"), caption=t_item.get("caption"))
+                                                elif m_type == "video":
+                                                    await user_client.send_video(group, t_item.get("file_id"), caption=t_item.get("caption"))
+                                            
+                                            # تحديث الإحصائيات (نجاح)
+                                            fresh_data = load_data()
+                                            if user_id in fresh_data:
+                                                fresh_data[user_id]["stats"]["success"] = fresh_data[user_id]["stats"].get("success", 0) + 1
+                                                save_data(fresh_data)
+                                                
                                             await asyncio.sleep(3)
                                         except Exception as grp_err:
                                             print(f"فشل النشر في المجموعات: {grp_err}")
+                                            # تحديث الإحصائيات (فشل)
+                                            fresh_data = load_data()
+                                            if user_id in fresh_data:
+                                                fresh_data[user_id]["stats"]["failed"] = fresh_data[user_id]["stats"].get("failed", 0) + 1
+                                                save_data(fresh_data)
                         except Exception as client_err:
                             print(f"خطأ في جلسة الحساب: {client_err}")
                     
-                    await asyncio.sleep(delay)
+                    # تأخير عشوائي لحماية الحسابات من الحظر (الوقت المحدد + بين 0 إلى 30 ثانية عشوائية)
+                    actual_delay = random.randint(int(delay), int(delay) + 30)
+                    await asyncio.sleep(actual_delay)
         except Exception as e:
             print(f"خطأ في المحرك: {e}")
 
@@ -124,17 +155,19 @@ async def start_command(client, message):
         return
 
     if user_id not in data:
-        data[user_id] = {"groups": [], "delay": 120, "active": False, "accounts": [], "texts": [], "state": None, "banned": False}
+        data[user_id] = {"groups": [], "paused_groups": [], "delay": 120, "active": False, "accounts": [], "texts": [], "stats": {"success": 0, "failed": 0}, "state": None, "banned": False}
     else:
         if "accounts" not in data[user_id]: data[user_id]["accounts"] = []
         if "texts" not in data[user_id]: data[user_id]["texts"] = []
         if "groups" not in data[user_id]: data[user_id]["groups"] = []
+        if "paused_groups" not in data[user_id]: data[user_id]["paused_groups"] = []
+        if "stats" not in data[user_id]: data[user_id]["stats"] = {"success": 0, "failed": 0}
         if "banned" not in data[user_id]: data[user_id]["banned"] = False
     
     data[user_id]["state"] = None
     save_data(data)
     
-    welcome_template = data.get("_settings", {}).get("welcome_message", "أهلاً بك يا {name}، هذا بوت النشر التلقائي.")
+    welcome_template = data.get("_settings", {}).get("welcome_message", "أهلاً بك يا {name}، هذا بوت النشر التلقائي الذكي.")
     welcome_text = welcome_template.replace("{name}", message.from_user.first_name)
     
     if admin_status:
@@ -173,7 +206,7 @@ async def callback_handler(client, call):
         return
 
     if user_id not in data: 
-        data[user_id] = {"groups": [], "delay": 120, "active": False, "accounts": [], "texts": [], "state": None, "banned": False}
+        data[user_id] = {"groups": [], "paused_groups": [], "delay": 120, "active": False, "accounts": [], "texts": [], "stats": {"success": 0, "failed": 0}, "state": None, "banned": False}
 
     if call.data == "back_main":
         data[user_id]["state"] = None
@@ -219,13 +252,11 @@ async def callback_handler(client, call):
         if not admin_status:
             await call.answer("❌ غير مسموح!", show_alert=True)
             return
-        
         await call.answer()
         settings = data.setdefault("_settings", {})
-        current_welcome = settings.get("welcome_message", "أهلاً بك يا {name}، هذا بوت النشر التلقائي.")
+        current_welcome = settings.get("welcome_message", "أهلاً بك يا {name}، هذا بوت النشر التلقائي الذكي.")
         data[user_id]["state"] = "waiting_for_new_welcome"
         save_data(data)
-        
         try:
             await call.message.edit_text(
                 f"✏️ رسالة الترحيب الحالية:\n{current_welcome}\n\nأرسل رسالة الترحيب الجديدة الآن (يمكنك استخدام {{name}} لاسم المستخدم):",
@@ -261,11 +292,14 @@ async def callback_handler(client, call):
 
     elif call.data == "show_groups":
         groups = data[user_id].get("groups", [])
+        paused = data[user_id].get("paused_groups", [])
         text = f"👥 **السوبرات والمجموعات المضافة:** (`{len(groups)}`)\n\n"
         for i, g in enumerate(groups, 1):
-            text += f"{i}. `{g}`\n"
+            status = "⏸️ (موقوفة مؤقتاً)" if g in paused else "🟢 (نشطة)"
+            text += f"{i}. `{g}` - {status}\n"
         keyboard = [
             [InlineKeyboardButton("➕ إضافة سوبر", callback_data="add_group")],
+            [InlineKeyboardButton("🔄 تبديل حالة مجموعة", callback_data="toggle_group_pause")],
             [InlineKeyboardButton("🗑️ تفريغ السوبرات", callback_data="clear_groups")],
             [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
         ]
@@ -276,19 +310,45 @@ async def callback_handler(client, call):
         save_data(data)
         await call.message.edit_text("📥 أرسل معرف السوبر أو الرابط (مثال: `@Group`):", reply_markup=back_menu())
         
+    elif call.data == "toggle_group_pause":
+        data[user_id]["state"] = "waiting_for_toggle_group"
+        save_data(data)
+        await call.message.edit_text("🔄 أرسل معرف السوبر الذي تريد إيقافه مؤقتاً أو تفعيله:", reply_markup=back_menu())
+
+    elif call.data == "show_paused_groups":
+        paused = data[user_id].get("paused_groups", [])
+        text = f"⏸️ **المجموعات الموقوفة مؤقتاً:** (`{len(paused)}`)\n\n"
+        for i, g in enumerate(paused, 1):
+            text += f"{i}. `{g}`\n"
+        await call.message.edit_text(text, reply_markup=back_menu())
+
+    elif call.data == "show_stats":
+        stats = data[user_id].get("stats", {"success": 0, "failed": 0})
+        text = (
+            f"📊 **إحصائيات النشر الخاصة بك:**\n\n"
+            f"✅ الرسائل الناجحة: `{stats.get('success', 0)}`\n"
+            f"❌ الرسائل الفاشلة: `{stats.get('failed', 0)}`\n"
+        )
+        await call.message.edit_text(text, reply_markup=back_menu())
+
     elif call.data == "clear_groups":
         data[user_id]["groups"] = []
+        data[user_id]["paused_groups"] = []
         save_data(data)
         await call.message.edit_text("🗑️ تم تفريغ قائمة السوبرات.", reply_markup=back_menu())
 
     elif call.data == "show_texts":
         texts = data[user_id].get("texts", [])
-        text = f"✉️ **رسائل النشر المحفوظة:** (`{len(texts)}`)\n\n"
+        text = f"✉️ **رسائل والوسائط المحفوظة:** (`{len(texts)}`)\n\n"
         for i, t in enumerate(texts, 1):
-            preview = t[:40] + "..." if len(t) > 40 else t
+            if isinstance(t, str):
+                preview = t[:40] + "..." if len(t) > 40 else t
+            else:
+                m_type = t.get("type")
+                preview = f"[{m_type.upper()}] " + (t.get("caption", "")[:30] or "بدون وصف")
             text += f"{i}. {preview}\n"
         keyboard = [
-            [InlineKeyboardButton("➕ إضافة رسالة جديدة", callback_data="add_text")],
+            [InlineKeyboardButton("➕ إضافة رسالة/وسائط جديدة", callback_data="add_text")],
             [InlineKeyboardButton("🗑️ حذف جميع الرسائل", callback_data="clear_texts")],
             [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
         ]
@@ -297,7 +357,7 @@ async def callback_handler(client, call):
     elif call.data == "add_text":
         data[user_id]["state"] = "waiting_for_text"
         save_data(data)
-        await call.message.edit_text("✍️ أرسل نص رسالة النشر الجديدة:", reply_markup=back_menu())
+        await call.message.edit_text("✍️ أرسل نص رسالة النشر أو صورة/فيديو مع الكابشن الآن:", reply_markup=back_menu())
         
     elif call.data == "clear_texts":
         data[user_id]["texts"] = []
@@ -307,11 +367,11 @@ async def callback_handler(client, call):
     elif call.data == "set_time":
         data[user_id]["state"] = "waiting_for_time"
         save_data(data)
-        await call.message.edit_text("⏱️ أرسل مدة النشر بالثواني (مثلاً 120):", reply_markup=back_menu())
+        await call.message.edit_text("⏱️ أرسل مدة النشر الأساسية بالثواني (مثلاً 120):", reply_markup=back_menu())
         
     elif call.data == "start_pub":
         if not data[user_id].get("accounts") or not data[user_id].get("texts") or not data[user_id].get("groups"):
-            await call.answer("❌ يجب إضافة حساب، ورسالة، ومجموعة واحدة على الأقل أولاً!", show_alert=True)
+            await call.answer("❌ يجب إضافة حساب، ورسالة/وسائط، ومجموعة واحدة على الأقل أولاً!", show_alert=True)
         else:
             data[user_id]["active"] = True
             save_data(data)
@@ -347,9 +407,6 @@ async def message_handler(client, message):
     if user_id not in data or not data[user_id].get("state"): return
     state = data[user_id]["state"]
 
-    if not message.text:
-        return
-
     if state == "waiting_for_admin_broadcast":
         if not admin_status:
             return
@@ -383,7 +440,7 @@ async def message_handler(client, message):
         data[user_id]["state"] = None
         
         if target_id not in data:
-            data[target_id] = {"groups": [], "delay": 120, "active": False, "accounts": [], "texts": [], "state": None, "banned": False}
+            data[target_id] = {"groups": [], "paused_groups": [], "delay": 120, "active": False, "accounts": [], "texts": [], "stats": {"success": 0, "failed": 0}, "state": None, "banned": False}
         
         current_status = data[target_id].get("banned", False)
         new_status = not current_status
@@ -508,13 +565,48 @@ async def message_handler(client, message):
             save_data(data)
         return
 
+    elif state == "waiting_for_toggle_group":
+        try:
+            g_input = message.text.strip()
+            if not g_input.startswith("@"):
+                g_input = "@" + g_input
+            
+            paused = data[user_id].setdefault("paused_groups", [])
+            if g_input in paused:
+                paused.remove(g_input)
+                msg = f"🟢 تم إلغاء الإيقاف المؤقت وإعادة تفعيل المجموعة: {g_input}"
+            else:
+                paused.append(g_input)
+                msg = f"⏸️ تم إيقاف النشر في المجموعة مؤقتاً: {g_input}"
+                
+            data[user_id]["state"] = None
+            save_data(data)
+            await message.reply_text(msg, reply_markup=main_menu(admin_status))
+        except Exception as e:
+            await message.reply_text(f"❌ حدث خطأ: {e}")
+            data[user_id]["state"] = None
+            save_data(data)
+        return
+
     elif state == "waiting_for_text":
         try:
             if "texts" not in data[user_id]: data[user_id]["texts"] = []
-            data[user_id]["texts"].append(message.text)
+            
+            msg_data = {}
+            if message.text:
+                msg_data = {"type": "text", "content": message.text}
+            elif message.photo:
+                msg_data = {"type": "photo", "file_id": message.photo.file_id, "caption": message.caption or ""}
+            elif message.video:
+                msg_data = {"type": "video", "file_id": message.video.file_id, "caption": message.caption or ""}
+            else:
+                await message.reply_text("❌ يرجى إرسال نص، صورة، أو فيديو فقط!")
+                return
+
+            data[user_id]["texts"].append(msg_data)
             data[user_id]["state"] = None
             save_data(data)
-            await message.reply_text("✅ تم حفظ وإضافة الرسالة بنجاح.", reply_markup=main_menu(admin_status))
+            await message.reply_text("✅ تم حفظ وإضافة الرسالة/الوسائط بنجاح.", reply_markup=main_menu(admin_status))
         except Exception as e:
             await message.reply_text(f"❌ حدث خطأ: {e}")
             data[user_id]["state"] = None
@@ -533,7 +625,7 @@ async def message_handler(client, message):
             save_data(data)
         return
 
-# --- سيرفر الويب المدمج لفحص Render ---
+# --- سيرفر الويب المدمج لفحص Render (يمنع سكون البوت) ---
 async def handle_ping(reader, writer):
     try:
         await reader.read(100)
@@ -565,3 +657,4 @@ async def main():
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
+
