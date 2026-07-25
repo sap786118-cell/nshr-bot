@@ -1,6 +1,6 @@
-hereimport os
-import json
+import os
 import asyncio
+from pymongo import MongoClient
 from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import SessionPasswordNeeded, UserNotParticipant
@@ -13,29 +13,44 @@ API_HASH = "0adc25ac386d50e8ee9f3b987863c4c0"
 ADMIN_USERNAME = "scofr"
 REQUIRED_CHANNEL = "@m_55wa"  # قناة الاشتراك الإجباري
 
+# --- إعدادات قاعدة البيانات السحابية (MongoDB) ---
+MONGO_URI = "mongodb+srv://sap786118_db_user:77880zzpo@cluster0.extvh0l.mongodb.net/?appName=Cluster0"
+mongo_client = MongoClient(MONGO_URI)
+db = mongo_client["telegram_publisher_bot"]
+users_col = db["users_config"]
+
 app = Client("publisher_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
-DATA_FILE = "users_config.json"
 login_attempts = {}
 
 def load_data():
-    if not os.path.exists(DATA_FILE): return {}
-    with open(DATA_FILE, 'r', encoding='utf-8') as f: 
-        try:
-            data = json.load(f)
-            for uid, udata in data.items():
-                if uid == "_settings": continue
-                if isinstance(udata, dict):
-                    if "accounts" not in udata: udata["accounts"] = []
-                    if "texts" not in udata: udata["texts"] = []
-                    if "groups" not in udata: udata["groups"] = []
-                    if "banned" not in udata: udata["banned"] = False
-            return data
-        except:
-            return {}
+    data = {}
+    try:
+        for doc in users_col.find():
+            uid = doc["_id"]
+            doc_copy = dict(doc)
+            del doc_copy["_id"]
+            data[uid] = doc_copy
+    except Exception as e:
+        print(f"Error loading from DB: {e}")
+    
+    if "_settings" not in data:
+        data["_settings"] = {}
+        
+    for uid, udata in data.items():
+        if uid == "_settings": continue
+        if isinstance(udata, dict):
+            if "accounts" not in udata: udata["accounts"] = []
+            if "texts" not in udata: udata["texts"] = []
+            if "groups" not in udata: udata["groups"] = []
+            if "banned" not in udata: udata["banned"] = False
+    return data
 
 def save_data(data):
-    with open(DATA_FILE, 'w', encoding='utf-8') as f: 
-        json.dump(data, f, ensure_ascii=False, indent=4)
+    try:
+        for uid, udata in data.items():
+            users_col.update_one({"_id": uid}, {"$set": udata}, upsert=True)
+    except Exception as e:
+        print(f"Error saving to DB: {e}")
 
 def is_admin(user):
     return user.username and user.username.lower() == ADMIN_USERNAME.lower()
@@ -74,7 +89,7 @@ def subscription_markup():
         [InlineKeyboardButton("✅ لقد اشتركت، تحقق الآن", callback_data="check_subscription")]
     ])
 
-# --- محرك النشر التلقائي في الخلفية (يدعم النصوص والوسائط) ---
+# --- محرك النشر التلقائي في الخلفية ---
 async def background_publisher():
     while True:
         await asyncio.sleep(10)
@@ -101,7 +116,6 @@ async def background_publisher():
                                                 else:
                                                     await user_client.send_message(group, item.get("content", ""))
                                             else:
-                                                # دعم النسخة القديمة إن وجدت
                                                 await user_client.send_message(group, item)
                                             await asyncio.sleep(3)
                                         except Exception as grp_err:
@@ -526,7 +540,7 @@ async def message_handler(client, message):
             save_data(data)
         return
 
-# --- سيرفر الويب المدمج (تنبيه Render / UptimeRobot) ---
+# --- سيرفر الويب المدمج (تنبيه Render) ---
 async def handle_ping(reader, writer):
     try:
         await reader.read(100)
