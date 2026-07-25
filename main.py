@@ -61,6 +61,7 @@ def main_menu(is_admin_user=False):
         [InlineKeyboardButton("👥 السوبرات", callback_data="show_groups"), InlineKeyboardButton("➕ إضافة سوبر", callback_data="add_group")],
         [InlineKeyboardButton("⏸️ المجموعات المؤقتة", callback_data="show_paused_groups"), InlineKeyboardButton("📊 الإحصائيات", callback_data="show_stats")],
         [InlineKeyboardButton("⏱️ ضبط الوقت", callback_data="set_time"), InlineKeyboardButton("✉️ رسائل النشر", callback_data="show_texts")],
+        [InlineKeyboardButton("📖 شرح البوت", callback_data="bot_guide")],
         [InlineKeyboardButton("🔴 إيقاف النشر", callback_data="stop_pub"), InlineKeyboardButton("🟢 بدء النشر", callback_data="start_pub")],
         [InlineKeyboardButton("👑 المطور", url="https://t.me/scofr")]
     ]
@@ -77,7 +78,7 @@ def subscription_markup():
         [InlineKeyboardButton("✅ لقد اشتركت، تحقق الآن", callback_data="check_subscription")]
     ])
 
-# --- محرك النشر الذكي في الخلفية (يدعم الوسائط والتأخير العشوائي والإحصائيات) ---
+# --- محرك النشر الذكي في الخلفية ---
 async def background_publisher():
     while True:
         await asyncio.sleep(10)
@@ -101,7 +102,6 @@ async def background_publisher():
                                         continue
                                     for t_item in texts:
                                         try:
-                                            # التعامل مع النصوص أو الوسائط (صور / فيديوهات)
                                             if isinstance(t_item, str):
                                                 await user_client.send_message(group, t_item)
                                             else:
@@ -113,7 +113,6 @@ async def background_publisher():
                                                 elif m_type == "video":
                                                     await user_client.send_video(group, t_item.get("file_id"), caption=t_item.get("caption"))
                                             
-                                            # تحديث الإحصائيات (نجاح)
                                             fresh_data = load_data()
                                             if user_id in fresh_data:
                                                 fresh_data[user_id]["stats"]["success"] = fresh_data[user_id]["stats"].get("success", 0) + 1
@@ -122,7 +121,6 @@ async def background_publisher():
                                             await asyncio.sleep(3)
                                         except Exception as grp_err:
                                             print(f"فشل النشر في المجموعات: {grp_err}")
-                                            # تحديث الإحصائيات (فشل)
                                             fresh_data = load_data()
                                             if user_id in fresh_data:
                                                 fresh_data[user_id]["stats"]["failed"] = fresh_data[user_id]["stats"].get("failed", 0) + 1
@@ -130,7 +128,6 @@ async def background_publisher():
                         except Exception as client_err:
                             print(f"خطأ في جلسة الحساب: {client_err}")
                     
-                    # تأخير عشوائي لحماية الحسابات من الحظر (الوقت المحدد + بين 0 إلى 30 ثانية عشوائية)
                     actual_delay = random.randint(int(delay), int(delay) + 30)
                     await asyncio.sleep(actual_delay)
         except Exception as e:
@@ -213,6 +210,18 @@ async def callback_handler(client, call):
         save_data(data)
         await call.message.edit_text("إليك لوحة التحكم:", reply_markup=main_menu(admin_status))
         
+    elif call.data == "bot_guide":
+        guide_text = (
+            "📖 **دليل استخدام بوت النشر التلقائي الذكي:**\n\n"
+            "1️⃣ **إضافة حساب (👤 حساباتي):** اربط حسابك برقم الهاتف وكود التحقق ليعمل البوت كمساعد شخصي للنشر.\n"
+            "2️⃣ **إضافة السوبرات (👥 السوبرات):** أرسل معرفات المجموعات أو السوبرات التي تريد النشر فيها (مثال: `@Group`).\n"
+            "3️⃣ **رسائل النشر (✉️ رسائل النشر):** أرسل نصوصاً، صوراً، أو فيديوهات مع الوصف (الكابشن) ليقوم البوت بنشرها.\n"
+            "4️⃣ **ضبط الوقت (⏱️ ضبط الوقت):** حدد الفاصل الزمني الأساسي بالثواني (مع حماية عشوائية لمنع الحظر).\n"
+            "5️⃣ **التحكم بالنشر (🟢/🔴):** بعد استيفاء الشروط (حساب + مجموعة + رسالة)، اضغط على بدء النشر ليعمل تلقائياً.\n\n"
+            "💡 *ملاحظة:* البوت مبرمج ليعمل 24 ساعة دون توقف."
+        )
+        await call.message.edit_text(guide_text, reply_markup=back_menu())
+
     elif call.data == "admin_panel":
         if not admin_status:
             await call.answer("❌ عذراً، هذه اللوحة للمطور فقط!", show_alert=True)
@@ -625,7 +634,7 @@ async def message_handler(client, message):
             save_data(data)
         return
 
-# --- سيرفر الويب المدمج لفحص Render (يمنع سكون البوت) ---
+# --- سيرفر الويب المدمج لفحص Render ---
 async def handle_ping(reader, writer):
     try:
         await reader.read(100)
@@ -657,4 +666,3 @@ async def main():
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
-
