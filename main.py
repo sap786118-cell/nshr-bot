@@ -1,7 +1,7 @@
 import asyncio
+import json
 import os
 import random
-from pymongo import MongoClient
 from pyrogram import Client, filters, idle
 from pyrogram.enums import ChatMemberStatus
 from pyrogram.errors import SessionPasswordNeeded, UserNotParticipant
@@ -14,17 +14,36 @@ API_HASH = "0adc25ac386d50e8ee9f3b987863c4c0"
 MAIN_ADMIN_USERNAME = "scofr"  # معرف المطور الأساسي
 REQUIRED_CHANNEL = "@m_55wa"  # قناة الاشتراك الإجباري
 
-# رابط قاعدة البيانات السحابية MongoDB (مع كلمة المرور الخاصة بك)
-MONGO_URI = (
-    "mongodb+srv://sap786118_db_user:77880zzpo@cluster0.extvh0l.mongodb.net"
-    "/?appName=Cluster0"
-)
+DATA_FILE = "bot_data.json"
 
-# اتصال قاعدة البيانات
-mongo_client = MongoClient(MONGO_URI)
-db = mongo_client["telegram_publisher_bot"]
-users_col = db["users"]
-settings_col = db["settings"]
+
+def load_data():
+  if os.path.exists(DATA_FILE):
+    try:
+      with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+    except:
+      pass
+  return {
+      "users": {},
+      "settings": {
+          "welcome_message": (
+              "أهلاً بك يا {name}، هذا بوت النشر التلقائي الذكي."
+          ),
+          "developers": [],
+      },
+  }
+
+
+def save_data(data):
+  try:
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+      json.dump(data, f, ensure_ascii=False, indent=4)
+  except Exception as e:
+    print(f"Error saving data: {e}")
+
+
+db_data = load_data()
 
 app = Client(
     "publisher_bot",
@@ -36,30 +55,10 @@ app = Client(
 login_attempts = {}
 
 
-def load_settings():
-  settings = settings_col.find_one({"_id": "global_settings"})
-  if not settings:
-    settings = {
-        "_id": "global_settings",
-        "welcome_message": (
-            "أهلاً بك يا {name}، هذا بوت النشر التلقائي الذكي."
-        ),
-        "developers": [],
-    }
-    settings_col.insert_one(settings)
-  return settings
-
-
-def save_settings(settings):
-  settings_col.replace_one({"_id": "global_settings"}, settings, upsert=True)
-
-
-def load_user_data(user_id):
+def get_user_data(user_id):
   uid_str = str(user_id)
-  user_data = users_col.find_one({"_id": uid_str})
-  if not user_data:
-    user_data = {
-        "_id": uid_str,
+  if uid_str not in db_data["users"]:
+    db_data["users"][uid_str] = {
         "groups": [],
         "paused_groups": [],
         "delay": 120,
@@ -70,22 +69,14 @@ def load_user_data(user_id):
         "state": None,
         "banned": False,
     }
-    users_col.insert_one(user_data)
-  return user_data
-
-
-def save_user_data(user_id, data):
-  uid_str = str(user_id)
-  data["_id"] = uid_str
-  users_col.replace_one({"_id": uid_str}, data, upsert=True)
+    save_data(db_data)
+  return db_data["users"][uid_str]
 
 
 def is_admin(user):
   if user.username and user.username.lower() == MAIN_ADMIN_USERNAME.lower():
     return True
-  settings = load_settings()
-  devs = settings.get("developers", [])
-  if user.id in devs:
+  if user.id in db_data["settings"].get("developers", []):
     return True
   return False
 
@@ -103,8 +94,7 @@ async def is_subscribed(client, user_id):
     return False
   except UserNotParticipant:
     return False
-  except Exception as e:
-    print(f"Subscription check error: {e}")
+  except Exception:
     return True
 
 
@@ -173,9 +163,7 @@ async def background_publisher():
   while True:
     await asyncio.sleep(10)
     try:
-      all_users = list(users_col.find())
-      for u_data in all_users:
-        user_id = u_data["_id"]
+      for user_id, u_data in list(db_data["users"].items()):
         if (
             u_data.get("active")
             and u_data.get("accounts")
@@ -224,25 +212,21 @@ async def background_publisher():
                               caption=t_item.get("caption"),
                           )
 
-                      current_u = load_user_data(user_id)
-                      current_u["stats"]["success"] = (
-                          current_u["stats"].get("success", 0) + 1
+                      u_data["stats"]["success"] = (
+                          u_data["stats"].get("success", 0) + 1
                       )
-                      save_user_data(user_id, current_u)
-
+                      save_data(db_data)
                       await asyncio.sleep(3)
                     except Exception as grp_err:
-                      print(f"فشل النشر في المجموعات: {grp_err}")
-                      current_u = load_user_data(user_id)
-                      current_u["stats"]["failed"] = (
-                          current_u["stats"].get("failed", 0) + 1
+                      print(f"فشل النشر: {grp_err}")
+                      u_data["stats"]["failed"] = (
+                          u_data["stats"].get("failed", 0) + 1
                       )
-                      save_user_data(user_id, current_u)
+                      save_data(db_data)
             except Exception as client_err:
               print(f"خطأ في جلسة الحساب: {client_err}")
 
-          actual_delay = random.randint(int(delay), int(delay) + 30)
-          await asyncio.sleep(actual_delay)
+          await asyncio.sleep(random.randint(int(delay), int(delay) + 30))
     except Exception as e:
       print(f"خطأ في المحرك: {e}")
 
@@ -261,17 +245,16 @@ async def start_command(client, message):
     return
 
   admin_status = is_admin(message.from_user)
-  u_data = load_user_data(user_id)
+  u_data = get_user_data(user_id)
 
   if u_data.get("banned", False) and not admin_status:
     await message.reply_text("❌ عذراً، لقد تم حظرك من استخدام هذا البوت.")
     return
 
   u_data["state"] = None
-  save_user_data(user_id, u_data)
+  save_data(db_data)
 
-  settings = load_settings()
-  welcome_template = settings.get(
+  welcome_template = db_data["settings"].get(
       "welcome_message", "أهلاً بك يا {name}، هذا بوت النشر التلقائي الذكي."
   )
   welcome_text = welcome_template.replace("{name}", message.from_user.first_name)
@@ -297,31 +280,22 @@ async def callback_handler(client, call):
       )
     else:
       await call.answer(
-          "❌ لم تقم بالاشتراك في القناة بعد! اشترك أولاً ثم حاول مجدداً.",
-          show_alert=True,
+          "❌ لم تقم بالاشتراك في القناة بعد!", show_alert=True
       )
     return
 
   if not await is_subscribed(client, user_id):
     await call.answer("❌ يجب عليك الاشتراك في القناة أولاً!", show_alert=True)
-    try:
-      await call.message.edit_text(
-          "❌ عذراً، يجب عليك الاشتراك في قناة البوت أولاً لتتمكن من استخدامه.\n\nرابط"
-          " القناة: https://t.me/m_55wa",
-          reply_markup=subscription_markup(),
-      )
-    except:
-      pass
     return
 
-  u_data = load_user_data(user_id)
+  u_data = get_user_data(user_id)
   if u_data.get("banned", False) and not admin_status:
-    await call.answer("❌ عذراً، تم حظرك من استخدام البوت.", show_alert=True)
+    await call.answer("❌ تم حظرك.", show_alert=True)
     return
 
   if call.data == "back_main":
     u_data["state"] = None
-    save_user_data(user_id, u_data)
+    save_data(db_data)
     await call.message.edit_text(
         "إليك لوحة التحكم:", reply_markup=main_menu(admin_status)
     )
@@ -329,19 +303,16 @@ async def callback_handler(client, call):
   elif call.data == "bot_guide":
     guide_text = (
         "📖 **دليل استخدام بوت النشر التلقائي الذكي:**\n\n1️⃣ **إضافة حساب (👤"
-        " حساباتي):** اربط حسابك برقم الهاتف وكود التحقق ليعمل البوت كمساعد"
-        " شخصي للنشر.\n2️⃣ **إضافة السوبرات (👥 السوبرات):** أرسل معرفات المجموعات"
-        " أو السوبرات التي تريد النشر فيها.\n3️⃣ **رسائل النشر (✉️ رسائل النشر):**"
-        " أرسل نصوصاً، صوراً، أو فيديوهات مع الوصف (الكابشن) ليقوم البوت"
-        " بنشرها.\n4️⃣ **ضبط الوقت (⏱️ ضبط الوقت):** حدد الفاصل الزمني الأساسي"
-        " بالثواني.\n5️⃣ **التحكم بالنشر (🟢/🔴):** بعد استيفاء الشروط، اضغط على"
-        " بدء النشر ليعمل تلقائياً.\n"
+        " حساباتي):** اربط حسابك برقم الهاتف.\n2️⃣ **إضافة السوبرات (👥"
+        " السوبرات):** أرسل معرفات المجموعات.\n3️⃣ **رسائل النشر (✉️ رسائل"
+        " النشر):** أرسل النصوص أو الوسائط.\n4️⃣ **ضبط الوقت (⏱️ ضبط الوقت):**"
+        " حدد الفاصل الزمني.\n5️⃣ **بدء النشر (🟢):** لتشغيل النشر التلقائي.\n"
     )
     await call.message.edit_text(guide_text, reply_markup=back_menu())
 
   elif call.data == "admin_panel":
     if not admin_status:
-      await call.answer("❌ عذراً، هذه اللوحة للمطورين فقط!", show_alert=True)
+      await call.answer("❌ للمطورين فقط!", show_alert=True)
       return
     admin_kb = InlineKeyboardMarkup([
         [
@@ -356,27 +327,24 @@ async def callback_handler(client, call):
             InlineKeyboardButton(
                 "👥 إدارة المطورين", callback_data="admin_developers"
             ),
-            InlineKeyboardButton(
-                "🚫 حظر/إلغاء حظر عضو", callback_data="admin_ban_user"
-            ),
+            InlineKeyboardButton("🚫 حظر عضو", callback_data="admin_ban_user"),
         ],
         [
             InlineKeyboardButton(
-                "✏️ تعديل رسالة الترحيب", callback_data="admin_set_welcome"
+                "✏️ تعديل الترحيب", callback_data="admin_set_welcome"
             ),
             InlineKeyboardButton("🔙 رجوع", callback_data="back_main"),
         ],
     ])
     await call.message.edit_text(
-        "👑 **مرحباً بك في لوحة تحكم الأدمن والمطورين:**", reply_markup=admin_kb
+        "👑 **لوحة تحكم الأدمن والمطورين:**", reply_markup=admin_kb
     )
 
   elif call.data == "admin_developers":
     if not admin_status:
       await call.answer("❌ غير مسموح!", show_alert=True)
       return
-    settings = load_settings()
-    devs = settings.get("developers", [])
+    devs = db_data["settings"].get("developers", [])
     dev_list_text = f"👥 **قائمة المطورين المضافين:** (`{len(devs)}`)\n\n"
     for i, d_id in enumerate(devs, 1):
       dev_list_text += f"{i}. آيدي: `{d_id}`\n"
@@ -400,7 +368,7 @@ async def callback_handler(client, call):
     if not admin_status:
       return
     u_data["state"] = "waiting_for_new_dev_id"
-    save_user_data(user_id, u_data)
+    save_data(db_data)
     await call.message.edit_text(
         "➕ أرسل الآن **آيدي المستخدم (ID)** للمطور الجديد ليحصل على صلاحيات"
         " لوحة الأدمن:",
@@ -411,7 +379,7 @@ async def callback_handler(client, call):
     if not admin_status:
       return
     u_data["state"] = "waiting_for_remove_dev_id"
-    save_user_data(user_id, u_data)
+    save_data(db_data)
     await call.message.edit_text(
         "🗑️ أرسل الآن **آيدي المستخدم (ID)** للمطور المراد إزالته من الصلاحيات:",
         reply_markup=back_menu(),
@@ -419,31 +387,24 @@ async def callback_handler(client, call):
 
   elif call.data == "admin_member_count":
     if not admin_status:
-      await call.answer("❌ غير مسموح!", show_alert=True)
       return
-    count = users_col.count_documents({})
-    await call.answer(
-        f"📊 إجمالي الأعضاء المشتركين في البوت: {count}", show_alert=True
-    )
+    count = len(db_data["users"])
+    await call.answer(f"📊 إجمالي الأعضاء: {count}", show_alert=True)
 
   elif call.data == "admin_broadcast":
     if not admin_status:
-      await call.answer("❌ غير مسموح!", show_alert=True)
       return
     u_data["state"] = "waiting_for_admin_broadcast"
-    save_user_data(user_id, u_data)
+    save_data(db_data)
     await call.message.edit_text(
-        "📢 أرسل الآن الرسالة (نص، صورة، فيديو...) التي تريد إذاعتها لجميع"
-        " الأعضاء:",
-        reply_markup=back_menu(),
+        "📢 أرسل رسالة الإذاعة الآن:", reply_markup=back_menu()
     )
 
   elif call.data == "admin_ban_user":
     if not admin_status:
-      await call.answer("❌ غير مسموح!", show_alert=True)
       return
     u_data["state"] = "waiting_for_ban_user_id"
-    save_user_data(user_id, u_data)
+    save_data(db_data)
     await call.message.edit_text(
         "🚫 أرسل الآن **آيدي المستخدم (ID)** المراد حظره أو إلغاء حظره:",
         reply_markup=back_menu(),
@@ -451,59 +412,37 @@ async def callback_handler(client, call):
 
   elif call.data == "admin_set_welcome":
     if not admin_status:
-      await call.answer("❌ غير مسموح!", show_alert=True)
       return
-    await call.answer()
-    settings = load_settings()
-    current_welcome = settings.get(
+    u_data["state"] = "waiting_for_new_welcome"
+    save_data(db_data)
+    current_welcome = db_data["settings"].get(
         "welcome_message", "أهلاً بك يا {name}، هذا بوت النشر التلقائي الذكي."
     )
-    u_data["state"] = "waiting_for_new_welcome"
-    save_user_data(user_id, u_data)
-    try:
-      await call.message.edit_text(
-          f"✏️ رسالة الترحيب الحالية:\n{current_welcome}\n\nأرسل رسالة الترحيب"
-          " الجديدة الآن (يمكنك استخدام {{name}} لاسم المستخدم):",
-          reply_markup=back_menu(),
-      )
-    except Exception as e:
-      print(f"Error editing welcome message: {e}")
+    await call.message.edit_text(
+        f"✏️ رسالة الترحيب الحالية:\n{current_welcome}\n\nأرسل رسالة الترحيب"
+        " الجديدة:",
+        reply_markup=back_menu(),
+    )
 
   elif call.data == "show_accounts":
     accs = u_data.get("accounts", [])
-    if accs:
-      text = f"👤 **الحسابات المضافة:** (`{len(accs)}`)\n\n"
-      for i, acc in enumerate(accs, 1):
-        text += (
-            f"{i}. {acc.get('first_name')} (@{acc.get('username', 'لا يوجد')})\n"
-        )
-      keyboard = [
-          [
-              InlineKeyboardButton(
-                  "➕ إضافة حساب آخر", callback_data="add_account"
-              )
-          ],
-          [
-              InlineKeyboardButton(
-                  "🗑️ حذف جميع الحسابات", callback_data="clear_accounts"
-              )
-          ],
-          [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")],
-      ]
-      await call.message.edit_text(
-          text, reply_markup=InlineKeyboardMarkup(keyboard)
+    text = f"👤 **الحسابات المضافة:** (`{len(accs)}`)\n\n"
+    for i, acc in enumerate(accs, 1):
+      text += (
+          f"{i}. {acc.get('first_name')} (@{acc.get('username', 'لا يوجد')})\n"
       )
-    else:
-      await call.message.edit_text(
-          "❌ ليس لديك أي حسابات مضافة.",
-          reply_markup=InlineKeyboardMarkup([[
-              InlineKeyboardButton("➕ إضافة حساب", callback_data="add_account")
-          ], [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]]),
-      )
+    keyboard = [
+        [InlineKeyboardButton("➕ إضافة حساب", callback_data="add_account")],
+        [InlineKeyboardButton("🗑️ حذف الحسابات", callback_data="clear_accounts")],
+        [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")],
+    ]
+    await call.message.edit_text(
+        text, reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
   elif call.data == "add_account":
     u_data["state"] = "waiting_for_phone"
-    save_user_data(user_id, u_data)
+    save_data(db_data)
     await call.message.edit_text(
         "📱 أرسل رقم هاتفك مع رمز الدولة (مثال: +9665xxxxxxxx):",
         reply_markup=back_menu(),
@@ -511,7 +450,7 @@ async def callback_handler(client, call):
 
   elif call.data == "clear_accounts":
     u_data["accounts"] = []
-    save_user_data(user_id, u_data)
+    save_data(db_data)
     await call.message.edit_text(
         "🗑️ تم حذف جميع الحسابات.", reply_markup=back_menu()
     )
@@ -519,22 +458,13 @@ async def callback_handler(client, call):
   elif call.data == "show_groups":
     groups = u_data.get("groups", [])
     paused = u_data.get("paused_groups", [])
-    text = f"👥 **السوبرات والمجموعات المضافة:** (`{len(groups)}`)\n\n"
+    text = f"👥 **السوبرات والمجموعات:** (`{len(groups)}`)\n\n"
     for i, g in enumerate(groups, 1):
-      status = "⏸️ (موقوفة مؤقتاً)" if g in paused else "🟢 (نشطة)"
+      status = "⏸️ (موقوفة)" if g in paused else "🟢 (نشطة)"
       text += f"{i}. `{g}` - {status}\n"
     keyboard = [
         [InlineKeyboardButton("➕ إضافة سوبر", callback_data="add_group")],
-        [
-            InlineKeyboardButton(
-                "🔄 تبديل حالة مجموعة", callback_data="toggle_group_pause"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🗑️ تفريغ السوبرات", callback_data="clear_groups"
-            )
-        ],
+        [InlineKeyboardButton("🗑️ تفريغ السوبرات", callback_data="clear_groups")],
         [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")],
     ]
     await call.message.edit_text(
@@ -543,68 +473,44 @@ async def callback_handler(client, call):
 
   elif call.data == "add_group":
     u_data["state"] = "waiting_for_group"
-    save_user_data(user_id, u_data)
+    save_data(db_data)
     await call.message.edit_text(
-        "📥 أرسل معرف السوبر أو الرابط (مثال: `@Group`):",
-        reply_markup=back_menu(),
+        "📥 أرسل معرف السوبر (مثال: `@Group`):", reply_markup=back_menu()
     )
-
-  elif call.data == "toggle_group_pause":
-    u_data["state"] = "waiting_for_toggle_group"
-    save_user_data(user_id, u_data)
-    await call.message.edit_text(
-        "🔄 أرسل معرف السوبر الذي تريد إيقافه مؤقتاً أو تفعيله:",
-        reply_markup=back_menu(),
-    )
-
-  elif call.data == "show_paused_groups":
-    paused = u_data.get("paused_groups", [])
-    text = f"⏸️ **المجموعات الموقوفة مؤقتاً:** (`{len(paused)}`)\n\n"
-    for i, g in enumerate(paused, 1):
-      text += f"{i}. `{g}`\n"
-    await call.message.edit_text(text, reply_markup=back_menu())
-
-  elif call.data == "show_stats":
-    stats = u_data.get("stats", {"success": 0, "failed": 0})
-    text = (
-        f"📊 **إحصائيات النشر الخاصة بك:**\n\n✅ الرسائل الناجحة:"
-        f" `{stats.get('success', 0)}`\n❌ الرسائل الفاشلة:"
-        f" `{stats.get('failed', 0)}`\n"
-    )
-    await call.message.edit_text(text, reply_markup=back_menu())
 
   elif call.data == "clear_groups":
     u_data["groups"] = []
     u_data["paused_groups"] = []
-    save_user_data(user_id, u_data)
+    save_data(db_data)
     await call.message.edit_text(
         "🗑️ تم تفريغ قائمة السوبرات.", reply_markup=back_menu()
     )
 
+  elif call.data == "show_stats":
+    stats = u_data.get("stats", {"success": 0, "failed": 0})
+    text = (
+        f"📊 **إحصائياتك:**\n\n✅ ناجحة: `{stats.get('success', 0)}`\n❌ فاشلة:"
+        f" `{stats.get('failed', 0)}`"
+    )
+    await call.message.edit_text(text, reply_markup=back_menu())
+
   elif call.data == "show_texts":
     texts = u_data.get("texts", [])
-    text = f"✉️ **رسائل والوسائط المحفوظة:** (`{len(texts)}`)\n\n"
+    text = f"✉️ **الرسائل المحفوظة:** (`{len(texts)}`)\n\n"
     for i, t in enumerate(texts, 1):
-      if isinstance(t, str):
-        preview = t[:40] + "..." if len(t) > 40 else t
-      else:
-        m_type = t.get("type")
-        preview = (
-            f"[{m_type.upper()}] "
-            + (t.get("caption", "")[:30] or "بدون وصف")
-        )
-      text += f"{i}. {preview}\n"
+      preview = (
+          t
+          if isinstance(t, str)
+          else f"[{t.get('type')}] {t.get('caption', '')}"
+      )
+      text += f"{i}. {preview[:30]}\n"
     keyboard = [
         [
             InlineKeyboardButton(
-                "➕ إضافة رسالة/وسائط جديدة", callback_data="add_text"
+                "➕ إضافة رسالة جديدة", callback_data="add_text"
             )
         ],
-        [
-            InlineKeyboardButton(
-                "🗑️ حذف جميع الرسائل", callback_data="clear_texts"
-            )
-        ],
+        [InlineKeyboardButton("🗑️ حذف الرسائل", callback_data="clear_texts")],
         [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")],
     ]
     await call.message.edit_text(
@@ -613,25 +519,21 @@ async def callback_handler(client, call):
 
   elif call.data == "add_text":
     u_data["state"] = "waiting_for_text"
-    save_user_data(user_id, u_data)
+    save_data(db_data)
     await call.message.edit_text(
-        "✍️ أرسل نص رسالة النشر أو صورة/فيديو مع الكابشن الآن:",
-        reply_markup=back_menu(),
+        "✍️ أرسل نص النشر أو صورة/فيديو مع الكابشن:", reply_markup=back_menu()
     )
 
   elif call.data == "clear_texts":
     u_data["texts"] = []
-    save_user_data(user_id, u_data)
-    await call.message.edit_text(
-        "🗑️ تم حذف جميع الرسائل.", reply_markup=back_menu()
-    )
+    save_data(db_data)
+    await call.message.edit_text("🗑️ تم حذف الرسائل.", reply_markup=back_menu())
 
   elif call.data == "set_time":
     u_data["state"] = "waiting_for_time"
-    save_user_data(user_id, u_data)
+    save_data(db_data)
     await call.message.edit_text(
-        "⏱️ أرسل مدة النشر الأساسية بالثواني (مثلاً 120):",
-        reply_markup=back_menu(),
+        "⏱️ أرسل مدة النشر بالثواني (مثلاً 120):", reply_markup=back_menu()
     )
 
   elif call.data == "start_pub":
@@ -640,18 +542,15 @@ async def callback_handler(client, call):
         or not u_data.get("texts")
         or not u_data.get("groups")
     ):
-      await call.answer(
-          "❌ يجب إضافة حساب، ورسالة/وسائط، ومجموعة واحدة على الأقل أولاً!",
-          show_alert=True,
-      )
+      await call.answer("❌ أضف حساباً ورسالة ومجموعة أولاً!", show_alert=True)
     else:
       u_data["active"] = True
-      save_user_data(user_id, u_data)
-      await call.answer("🟢 تم تفعيل النشر التلقائي بنجاح!", show_alert=True)
+      save_data(db_data)
+      await call.answer("🟢 تم تفعيل النشر التلقائي!", show_alert=True)
 
   elif call.data == "stop_pub":
     u_data["active"] = False
-    save_user_data(user_id, u_data)
+    save_data(db_data)
     await call.answer("🔴 تم إيقاف النشر التلقائي.", show_alert=True)
 
   try:
@@ -663,38 +562,23 @@ async def callback_handler(client, call):
 @app.on_message(~filters.command("start"))
 async def message_handler(client, message):
   user_id = message.from_user.id
-
   if not await is_subscribed(client, user_id):
-    await message.reply_text(
-        "❌ عذراً، يجب عليك الاشتراك في قناة البوت أولاً لتتمكن من استخدامه.\n\nرابط"
-        " القناة: https://t.me/m_55wa\n\nبعد الاشتراك، اضغط على زر التحقق بالأسفل"
-        " 👇",
-        reply_markup=subscription_markup(),
-    )
     return
 
   admin_status = is_admin(message.from_user)
-  u_data = load_user_data(user_id)
-
-  if u_data.get("banned", False) and not admin_status:
-    return
-
+  u_data = get_user_data(user_id)
   state = u_data.get("state")
   if not state:
     return
 
-  if state == "waiting_for_new_dev_id":
-    if not admin_status:
-      return
+  if state == "waiting_for_new_dev_id" and admin_status:
     try:
       new_dev_id = int(message.text.strip())
-      settings = load_settings()
-      if new_dev_id not in settings["developers"]:
-        settings["developers"].append(new_dev_id)
-        save_settings(settings)
+      if new_dev_id not in db_data["settings"]["developers"]:
+        db_data["settings"]["developers"].append(new_dev_id)
+        save_data(db_data)
         await message.reply_text(
-            f"✅ تم إضافة الآيدي (`{new_dev_id}`) لقائمة المطورين بنجاح وأصبح لديه"
-            " صلاحيات لوحة الأدمن!",
+            f"✅ تم إضافة الآيدي (`{new_dev_id}`) لقائمة المطورين بنجاح!",
             reply_markup=main_menu(admin_status),
         )
       else:
@@ -705,20 +589,17 @@ async def message_handler(client, message):
     except ValueError:
       await message.reply_text("❌ يرجى إرسال آيدي صحيح (أرقام فقط).")
     u_data["state"] = None
-    save_user_data(user_id, u_data)
+    save_data(db_data)
     return
 
-  elif state == "waiting_for_remove_dev_id":
-    if not admin_status:
-      return
+  elif state == "waiting_for_remove_dev_id" and admin_status:
     try:
       rem_dev_id = int(message.text.strip())
-      settings = load_settings()
-      if rem_dev_id in settings["developers"]:
-        settings["developers"].remove(rem_dev_id)
-        save_settings(settings)
+      if rem_dev_id in db_data["settings"]["developers"]:
+        db_data["settings"]["developers"].remove(rem_dev_id)
+        save_data(db_data)
         await message.reply_text(
-            f"🗑️ تمت إزالة الآيدي (`{rem_dev_id}`) من قائمة المطورين بنجاح.",
+            f"🗑️ تمت إزالة الآيدي (`{rem_dev_id}`) من قائمة المطورين.",
             reply_markup=main_menu(admin_status),
         )
       else:
@@ -729,65 +610,47 @@ async def message_handler(client, message):
     except ValueError:
       await message.reply_text("❌ يرجى إرسال آيدي صحيح (أرقام فقط).")
     u_data["state"] = None
-    save_user_data(user_id, u_data)
+    save_data(db_data)
     return
 
-  elif state == "waiting_for_admin_broadcast":
-    if not admin_status:
-      return
+  elif state == "waiting_for_admin_broadcast" and admin_status:
     u_data["state"] = None
-    save_user_data(user_id, u_data)
-
+    save_data(db_data)
     success = 0
-    failed = 0
-    status_msg = await message.reply_text("⏳ جاري بدء الإذاعة لجميع المشتركين...")
-
-    all_users = list(users_col.find())
-    for target in all_users:
-      target_id = target["_id"]
+    for target_id in db_data["users"]:
       try:
         await message.copy(chat_id=int(target_id))
         success += 1
         await asyncio.sleep(0.1)
-      except Exception:
-        failed += 1
-
-    await status_msg.edit_text(
-        f"✅ تمت الإذاعة بنجاح! 🚀\n\n- تم الإرسال إلى: {success} مستخدم\n- فشل"
-        f" الإرسال لـ: {failed} مستخدم",
+      except:
+        pass
+    await message.reply_text(
+        f"✅ تمت الإذاعة إلى {success} مستخدم.",
         reply_markup=main_menu(admin_status),
     )
     return
 
-  elif state == "waiting_for_ban_user_id":
-    if not admin_status:
-      return
+  elif state == "waiting_for_ban_user_id" and admin_status:
     target_id = message.text.strip()
     u_data["state"] = None
-    save_user_data(user_id, u_data)
-
-    target_data = load_user_data(target_id)
-    current_status = target_data.get("banned", False)
-    new_status = not current_status
+    save_data(db_data)
+    target_data = get_user_data(target_id)
+    new_status = not target_data.get("banned", False)
     target_data["banned"] = new_status
-    save_user_data(target_id, target_data)
-
-    msg_result = (
-        f"🚫 تم حظر المستخدم (`{target_id}`) بنجاح."
+    save_data(db_data)
+    msg = (
+        f"🚫 تم حظر المستخدم (`{target_id}`)."
         if new_status
-        else f"🟢 تم إلغاء حظر المستخدم (`{target_id}`) بنجاح."
+        else f"🟢 تم إلغاء حظر المستخدم (`{target_id}`)."
     )
-    await message.reply_text(msg_result, reply_markup=main_menu(admin_status))
+    await message.reply_text(msg, reply_markup=main_menu(admin_status))
     return
 
-  elif state == "waiting_for_new_welcome":
-    if not admin_status:
-      return
-    settings = load_settings()
-    settings["welcome_message"] = message.text
-    save_settings(settings)
+  elif state == "waiting_for_new_welcome" and admin_status:
+    db_data["settings"]["welcome_message"] = message.text
+    save_data(db_data)
     u_data["state"] = None
-    save_user_data(user_id, u_data)
+    save_data(db_data)
     await message.reply_text(
         "✅ تم تحديث رسالة الترحيب بنجاح!", reply_markup=main_menu(admin_status)
     )
@@ -796,10 +659,7 @@ async def message_handler(client, message):
   elif state == "waiting_for_phone":
     try:
       temp_client = Client(
-          f"session_{user_id}_{message.text}",
-          api_id=API_ID,
-          api_hash=API_HASH,
-          in_memory=True,
+          f"session_{user_id}", api_id=API_ID, api_hash=API_HASH, in_memory=True
       )
       await temp_client.connect()
       code_info = await temp_client.send_code(message.text)
@@ -809,24 +669,19 @@ async def message_handler(client, message):
           "hash": code_info.phone_code_hash,
       }
       u_data["state"] = "waiting_for_otp"
-      save_user_data(user_id, u_data)
-      await message.reply_text(
-          "📥 تم إرسال كود التحقق من تيليجرام. **أرسل الكود هنا الآن:**"
-      )
+      save_data(db_data)
+      await message.reply_text("📥 أرسل كود التحقق الآن:")
     except Exception as e:
-      await message.reply_text(f"❌ حدث خطأ في رقم الهاتف: {e}")
+      await message.reply_text(f"❌ خطأ: {e}")
       u_data["state"] = None
-      save_user_data(user_id, u_data)
+      save_data(db_data)
     return
 
   elif state == "waiting_for_otp":
     attempt = login_attempts.get(user_id)
     if not attempt:
-      await message.reply_text(
-          "❌ انتهت الجلسة، الرجاء إعادة إرسال رقم الهاتف من لوحة التحكم."
-      )
       u_data["state"] = None
-      save_user_data(user_id, u_data)
+      save_data(db_data)
       return
     try:
       await attempt["client"].sign_in(
@@ -834,166 +689,109 @@ async def message_handler(client, message):
       )
       me = await attempt["client"].get_me()
       session_str = await attempt["client"].export_session_string()
-
-      account_info = {
+      u_data["accounts"].append({
           "session_string": session_str,
           "id": me.id,
-          "username": me.username if me.username else "لا يوجد",
+          "username": me.username or "لا يوجد",
           "first_name": me.first_name,
-      }
-
-      u_data["accounts"].append(account_info)
+      })
       await attempt["client"].disconnect()
       del login_attempts[user_id]
       u_data["state"] = None
-      save_user_data(user_id, u_data)
+      save_data(db_data)
       await message.reply_text(
-          "✅ تم ربط الحساب بنجاح وإضافته لقائمتك!",
-          reply_markup=main_menu(admin_status),
+          "✅ تم ربط الحساب بنجاح!", reply_markup=main_menu(admin_status)
       )
-
     except SessionPasswordNeeded:
       u_data["state"] = "waiting_for_password"
-      save_user_data(user_id, u_data)
-      await message.reply_text(
-          "🔐 هذا الحساب محمي بكلمة مرور (التحقق بخطوتين). **أرسل كلمة المرور"
-          " الآن:**"
-      )
+      save_data(db_data)
+      await message.reply_text("🔐 أرسل كلمة مرور التحقق بخطوتين:")
     except Exception as e:
-      await message.reply_text(f"❌ حدث خطأ في الكود: {e}")
+      await message.reply_text(f"❌ خطأ: {e}")
       u_data["state"] = None
-      save_user_data(user_id, u_data)
+      save_data(db_data)
     return
 
   elif state == "waiting_for_password":
     attempt = login_attempts.get(user_id)
-    if not attempt:
-      await message.reply_text("❌ انتهت الجلسة، الرجاء إعادة إرسال رقم الهاتف.")
-      u_data["state"] = None
-      save_user_data(user_id, u_data)
-      return
     try:
       await attempt["client"].check_password(message.text)
       me = await attempt["client"].get_me()
       session_str = await attempt["client"].export_session_string()
-
-      account_info = {
+      u_data["accounts"].append({
           "session_string": session_str,
           "id": me.id,
-          "username": me.username if me.username else "لا يوجد",
+          "username": me.username or "لا يوجد",
           "first_name": me.first_name,
-      }
-
-      u_data["accounts"].append(account_info)
+      })
       await attempt["client"].disconnect()
       del login_attempts[user_id]
       u_data["state"] = None
-      save_user_data(user_id, u_data)
+      save_data(db_data)
       await message.reply_text(
-          "✅ تم التحقق من كلمة المرور وربط الحساب بنجاح!",
-          reply_markup=main_menu(admin_status),
+          "✅ تم ربط الحساب بنجاح!", reply_markup=main_menu(admin_status)
       )
-
     except Exception as e:
-      await message.reply_text(f"❌ كلمة المرور غير صحيحة: {e}")
+      await message.reply_text(f"❌ خطأ: {e}")
       u_data["state"] = None
-      save_user_data(user_id, u_data)
+      save_data(db_data)
     return
 
   elif state == "waiting_for_group":
-    try:
-      group_input = message.text.strip()
-      if "t.me/" in group_input:
-        group_input = "@" + group_input.split("t.me/")[-1].strip("/")
-      elif not group_input.startswith("@"):
-        group_input = "@" + group_input
-
-      u_data["groups"].append(group_input)
-      u_data["state"] = None
-      save_user_data(user_id, u_data)
-      await message.reply_text(
-          f"✅ تم إضافة السوبر بنجاح: {group_input}",
-          reply_markup=main_menu(admin_status),
-      )
-    except Exception as e:
-      await message.reply_text(f"❌ حدث خطأ: {e}")
-      u_data["state"] = None
-      save_user_data(user_id, u_data)
-    return
-
-  elif state == "waiting_for_toggle_group":
-    try:
-      g_input = message.text.strip()
-      if not g_input.startswith("@"):
-        g_input = "@" + g_input
-
-      paused = u_data.setdefault("paused_groups", [])
-      if g_input in paused:
-        paused.remove(g_input)
-        msg = f"🟢 تم إلغاء الإيقاف المؤقت وإعادة تفعيل المجموعة: {g_input}"
-      else:
-        paused.append(g_input)
-        msg = f"⏸️ تم إيقاف النشر في المجموعة مؤقتاً: {g_input}"
-
-      u_data["state"] = None
-      save_user_data(user_id, u_data)
-      await message.reply_text(msg, reply_markup=main_menu(admin_status))
-    except Exception as e:
-      await message.reply_text(f"❌ حدث خطأ: {e}")
-      u_data["state"] = None
-      save_user_data(user_id, u_data)
+    group_input = message.text.strip()
+    if not group_input.startswith("@"):
+      group_input = "@" + group_input
+    u_data["groups"].append(group_input)
+    u_data["state"] = None
+    save_data(db_data)
+    await message.reply_text(
+        f"✅ تم إضافة السوبر: {group_input}",
+        reply_markup=main_menu(admin_status),
+    )
     return
 
   elif state == "waiting_for_text":
-    try:
-      msg_data = {}
-      if message.text:
-        msg_data = {"type": "text", "content": message.text}
-      elif message.photo:
-        msg_data = {
-            "type": "photo",
-            "file_id": message.photo.file_id,
-            "caption": message.caption or "",
-        }
-      elif message.video:
-        msg_data = {
-            "type": "video",
-            "file_id": message.video.file_id,
-            "caption": message.caption or "",
-        }
-      else:
-        await message.reply_text("❌ يرجى إرسال نص، صورة، أو فيديو فقط!")
-        return
-
-      u_data["texts"].append(msg_data)
-      u_data["state"] = None
-      save_user_data(user_id, u_data)
-      await message.reply_text(
-          "✅ تم حفظ وإضافة الرسالة/الوسائط بنجاح.",
-          reply_markup=main_menu(admin_status),
-      )
-    except Exception as e:
-      await message.reply_text(f"❌ حدث خطأ: {e}")
-      u_data["state"] = None
-      save_user_data(user_id, u_data)
+    if message.text:
+      msg_data = {"type": "text", "content": message.text}
+    elif message.photo:
+      msg_data = {
+          "type": "photo",
+          "file_id": message.photo.file_id,
+          "caption": message.caption or "",
+      }
+    elif message.video:
+      msg_data = {
+          "type": "video",
+          "file_id": message.video.file_id,
+          "caption": message.caption or "",
+      }
+    else:
+      await message.reply_text("❌ أرسل نصاً أو صورة أو فيديو فقط!")
+      return
+    u_data["texts"].append(msg_data)
+    u_data["state"] = None
+    save_data(db_data)
+    await message.reply_text(
+        "✅ تم حفظ الرسالة بنجاح.", reply_markup=main_menu(admin_status)
+    )
     return
 
   elif state == "waiting_for_time":
     try:
       u_data["delay"] = int(message.text)
       u_data["state"] = None
-      save_user_data(user_id, u_data)
+      save_data(db_data)
       await message.reply_text(
-          "✅ تم ضبط وقت النشر بنجاح.", reply_markup=main_menu(admin_status)
+          "✅ تم ضبط الوقت.", reply_markup=main_menu(admin_status)
       )
-    except Exception as e:
-      await message.reply_text(f"❌ يجب إدخال رقم صحيح بالثواني: {e}")
+    except:
+      await message.reply_text("❌ أدخل رقماً صحيحاً بالثواني.")
       u_data["state"] = None
-      save_user_data(user_id, u_data)
+      save_data(db_data)
     return
 
 
-# --- سيرفر الويب المدمج (لمنع البوت من النوم على Render) ---
+# --- سيرفر الويب لمنع النوم على Render ---
 async def handle_ping(reader, writer):
   try:
     await reader.read(100)
@@ -1003,13 +801,13 @@ async def handle_ping(reader, writer):
     )
     writer.write(response.encode())
     await writer.drain()
-  except Exception:
+  except:
     pass
   finally:
     try:
       writer.close()
       await writer.wait_closed()
-    except Exception:
+    except:
       pass
 
 
@@ -1018,18 +816,12 @@ async def main():
   server = await asyncio.start_server(handle_ping, "0.0.0.0", port)
   print(f"Web server started on port {port}")
 
-  # تشغيل محرك النشر الخلفي في الخلفية
   asyncio.create_task(background_publisher())
-
-  # بدء تشغيل البوت
   await app.start()
-  print("البوت يعمل الآن بنجاح مع قاعدة بيانات MongoDB وسيرفر الويب المدمج...")
-
+  print("البوت يعمل الآن مع لوحة المطورين وسيرفر الويب وبدون قواعد خارجية...")
   await idle()
   await app.stop()
 
 
 if __name__ == "__main__":
-  loop = asyncio.get_event_loop()
-  loop.run_until_complete(main())
-
+  asyncio.run(main())
