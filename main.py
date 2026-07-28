@@ -130,6 +130,13 @@ async def background_publisher():
                                 for group in groups:
                                     if group in paused_groups:
                                         continue
+                                    
+                                    # تحويل الآيدي الرقمي إلى int لتجنب خطأ Pyrogram
+                                    try:
+                                        target_chat = int(group) if (group.isdigit() or (group.startswith("-") and group[1:].isdigit())) else group
+                                    except:
+                                        target_chat = group
+
                                     for t_item in texts:
                                         try:
                                             markup = None
@@ -137,15 +144,15 @@ async def background_publisher():
                                                 markup = InlineKeyboardMarkup([[InlineKeyboardButton(t_item.get("btn_text"), url=t_item.get("btn_url"))]])
 
                                             if isinstance(t_item, str):
-                                                await user_client.send_message(group, t_item)
+                                                await user_client.send_message(target_chat, t_item)
                                             else:
                                                 m_type = t_item.get("type")
                                                 if m_type == "text":
-                                                    await user_client.send_message(group, t_item.get("content"), reply_markup=markup)
+                                                    await user_client.send_message(target_chat, t_item.get("content"), reply_markup=markup)
                                                 elif m_type == "photo":
-                                                    await user_client.send_photo(group, t_item.get("file_id"), caption=t_item.get("caption"), reply_markup=markup)
+                                                    await user_client.send_photo(target_chat, t_item.get("file_id"), caption=t_item.get("caption"), reply_markup=markup)
                                                 elif m_type == "video":
-                                                    await user_client.send_video(group, t_item.get("file_id"), caption=t_item.get("caption"), reply_markup=markup)
+                                                    await user_client.send_video(target_chat, t_item.get("file_id"), caption=t_item.get("caption"), reply_markup=markup)
                                             
                                             fresh_data = load_data()
                                             if user_id in fresh_data:
@@ -154,6 +161,7 @@ async def background_publisher():
                                                 
                                             await asyncio.sleep(3)
                                         except Exception as grp_err:
+                                            print(f"فشل الإرسال للمجموعة {target_chat} بسبب: {grp_err}")
                                             fresh_data = load_data()
                                             if user_id in fresh_data:
                                                 fresh_data[user_id]["stats"]["failed"] = fresh_data[user_id]["stats"].get("failed", 0) + 1
@@ -661,8 +669,6 @@ async def message_handler(client, message):
 
     elif state == "waiting_for_text":
         try:
-            # يمكنك إرسال نص عادي أو نص مع زر بالشكل التالي:
-            # النص | اسم الزر - الرابط
             text_content = message.text or message.caption or ""
             btn_text, btn_url = None, None
             
