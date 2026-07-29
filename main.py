@@ -132,8 +132,11 @@ async def restore_config(client):
         logging.info("[i] لم يتم تعيين BACKUP_CHAT_ID، الاعتماد على التخزين المحلي فقط.")
         return
     logging.info("[*] جاري فحص ملف الإعدادات محلياً واستعادة النسخة...")
-    if not os.path.exists(DATA_FILE):
-        try:
+    try:
+        # إجبار بيروجرام على التعرف على قناة النسخ أولاً لتجنب خطأ Peer id invalid
+        await client.get_chat(BACKUP_CHAT_ID)
+        
+        if not os.path.exists(DATA_FILE):
             backups = []
             async for message in client.get_chat_history(BACKUP_CHAT_ID, limit=50):
                 if message.document and message.document.file_name == DATA_FILE:
@@ -144,8 +147,8 @@ async def restore_config(client):
                 latest_backup = backups[0]
                 await latest_backup.download(file_name=DATA_FILE)
                 logging.info(f"[+] تم استعادة أحدث نسخة احتياطية بنجاح من الرسالة رقم {latest_backup.id}!")
-        except Exception:
-            logging.exception("خطأ أثناء استعادة النسخة الاحتياطية")
+    except Exception:
+        logging.exception("خطأ أثناء استعادة النسخة الاحتياطية")
 
 async def backup_config(client):
     global data_changed
@@ -154,6 +157,9 @@ async def backup_config(client):
         return
     try:
         if os.path.exists(DATA_FILE):
+            # إجبار بيروجرام على التعرف على قناة النسخ لتجنب خطأ Peer id invalid
+            await client.get_chat(BACKUP_CHAT_ID)
+            
             sent_msg = await client.send_document(
                 chat_id=BACKUP_CHAT_ID,
                 document=DATA_FILE,
@@ -1048,4 +1054,3 @@ async def main():
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
-
