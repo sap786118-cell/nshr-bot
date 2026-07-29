@@ -68,6 +68,19 @@ async def upload_backup_file():
     except Exception as e:
         print(f"خطأ في رفع النسخة الاحتياطية السحابية: {e}")
 
+async def restore_backup_from_channel():
+    """تحميل أحدث نسخة احتياطية من قناة الباك آب تلقائياً عند تشغيل البوت"""
+    if not BACKUP_CHANNEL_ID:
+        return
+    try:
+        async for message in app.get_chat_history(BACKUP_CHANNEL_ID, limit=10):
+            if message.document and message.document.file_name == "users_config.json":
+                await message.download(file_name=DATA_FILE)
+                print("✅ تم استعادة قاعدة البيانات بنجاح من قناة النسخ الاحتياطي السحابي!")
+                break
+    except Exception as e:
+        print(f"⚠️ لم يتم العثور على نسخة سابقة أو حدث خطأ في الاستعادة: {e}")
+
 def is_admin(user):
     if user.username and user.username.lower() == MAIN_ADMIN_USERNAME.lower():
         return True
@@ -814,9 +827,15 @@ async def handle_ping(reader, writer):
 async def main():
     port = int(os.environ.get("PORT", 8080))
     server = await asyncio.start_server(handle_ping, '0.0.0.0', port)
-    asyncio.create_task(background_publisher())
+    
+    # بدء تشغيل العميل
     await app.start()
-    print("البوت يعمل الآن بنجاح على مدار الساعة...")
+    
+    # استعادة أحدث نسخة احتياطية من القناة قبل تشغيل أي شيء
+    await restore_backup_from_channel()
+    
+    asyncio.create_task(background_publisher())
+    print("البوت يعمل الآن بنجاح على مدار الساعة ويستعيد بياناته تلقائياً...")
     await idle()
     await app.stop()
 
