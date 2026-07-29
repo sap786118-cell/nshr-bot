@@ -12,16 +12,8 @@ from pyrogram.enums import ChatMemberStatus, ChatType
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8996776697:AAFquiMkylAqhbf_G5FbGYXSVnVa9LZ4k3A")
 API_ID = int(os.getenv("API_ID", "33057479"))
 API_HASH = os.getenv("API_HASH", "0adc25ac386d50e8ee9f3b987863c4c0")
-MAIN_ADMIN_USERNAME = "scofr"  # المطور الأساسي
+MAIN_ADMIN_USERNAME = "scofr"  # المطور الأساسي (عبد الكريم) - سيتم حفظ واستعادة النسخ هنا تلقائياً
 REQUIRED_CHANNEL = "@m_55wa"  # قناة الاشتراك الإجباري
-
-# قناة أو مجموعة النسخ الاحتياطي السحابي (يوزر أو آيدي)
-BACKUP_CHANNEL_ID = os.getenv("BACKUP_CHANNEL_ID")
-if BACKUP_CHANNEL_ID:
-    try:
-        BACKUP_CHANNEL_ID = int(BACKUP_CHANNEL_ID)
-    except:
-        pass
 
 app = Client("publisher_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
 DATA_FILE = "users_config.json"
@@ -53,37 +45,33 @@ def load_data():
 def save_data(data):
     with open(DATA_FILE, 'w', encoding='utf-8') as f: 
         json.dump(data, f, ensure_ascii=False, indent=4)
-    # رفع نسخة احتياطية سحابية تلقائياً للمجموعة
-    if BACKUP_CHANNEL_ID:
-        asyncio.create_task(upload_backup_file())
+    # رفع نسخة احتياطية تلقائياً في محادثة المطور الخاصة
+    asyncio.create_task(upload_backup_file())
 
 async def upload_backup_file():
     try:
         if os.path.exists(DATA_FILE):
             await app.send_document(
-                chat_id=BACKUP_CHANNEL_ID,
+                chat_id=MAIN_ADMIN_USERNAME,
                 document=DATA_FILE,
-                caption="🔄 تحديث نسخة احتياطية لقاعدة البيانات تلقائياً."
+                caption="🔄 نسخة احتياطية تلقائية لقاعدة البيانات (حفظ آمن)."
             )
     except Exception as e:
-        print(f"خطأ في رفع النسخة الاحتياطية السحابية: {e}")
+        print(f"خطأ في رفع النسخة الاحتياطية الخاصة: {e}")
 
 async def restore_backup_from_channel():
-    """تحميل أحدث نسخة احتياطية من مجموعة الباك آب تلقائياً عند تشغيل البوت وضبطها في المسار الصحيح"""
-    if not BACKUP_CHANNEL_ID:
-        return
+    """سحب أحدث نسخة احتياطية من محادثة المطور الخاصة تلقائياً عند التشغيل وضبطها في المسار الصحيح"""
     try:
-        print(f"🔄 جاري سحب النسخة الاحتياطية من المجموعة...")
-        async for message in app.get_chat_history(BACKUP_CHANNEL_ID, limit=20):
+        print(f"🔄 جاري سحب النسخة الاحتياطية من محادثة المطور الخاصة...")
+        async for message in app.get_chat_history(MAIN_ADMIN_USERNAME, limit=15):
             if message.document and message.document.file_name == "users_config.json":
-                # إجبار البوت على حفظ الملف في المسار الأساسي بدلاً من مجلد التنزيلات
                 target_path = os.path.abspath(DATA_FILE)
                 downloaded_file = await message.download(file_name=target_path)
-                print(f"✅ تم استعادة قاعدة البيانات بنجاح وتم وضعها في: {downloaded_file}")
+                print(f"✅ تم استعادة قاعدة البيانات بنجاح من محادثة المطور وتم وضعها في: {downloaded_file}")
                 return
-        print("⚠️ لم يتم العثور على ملف نسخة احتياطية سابق في المجموعة.")
+        print("⚠️ لم يتم العثور على ملف نسخة احتياطية سابق في محادثة المطور.")
     except Exception as e:
-        print(f"⚠️ خطأ أثناء محاولة سحب النسخة: {e}")
+        print(f"⚠️ خطأ أثناء محاولة سحب النسخة من المحادثة الخاصة: {e}")
 
 def is_admin(user):
     if user.username and user.username.lower() == MAIN_ADMIN_USERNAME.lower():
@@ -841,11 +829,11 @@ async def main():
     # بدء تشغيل العميل
     await app.start()
     
-    # استعادة أحدث نسخة احتياطية من المجموعة قبل تشغيل أي شيء
+    # استعادة أحدث نسخة احتياطية من محادثة المطور الخاصة قبل تشغيل أي شيء
     await restore_backup_from_channel()
     
     asyncio.create_task(background_publisher())
-    print("البوت يعمل الآن بنجاح على مدار الساعة ويستعيد بياناته تلقائياً...")
+    print("البوت يعمل الآن بنجاح على مدار الساعة ويستعيد بياناته من محادثتك الخاصة تلقائياً...")
     await idle()
     await app.stop()
 
