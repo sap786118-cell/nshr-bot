@@ -12,7 +12,7 @@ from pyrogram.enums import ChatMemberStatus, ChatType
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8996776697:AAFquiMkylAqhbf_G5FbGYXSVnVa9LZ4k3A")
 API_ID = int(os.getenv("API_ID", "33057479"))
 API_HASH = os.getenv("API_HASH", "0adc25ac386d50e8ee9f3b987863c4c0")
-MAIN_ADMIN_USERNAME = "scofr"  # المطور الأساسي (عبد الكريم) - سيتم حفظ واستعادة النسخ هنا تلقائياً
+MAIN_ADMIN_USERNAME = "scofr"  # حسابك الشخصي لحفظ النسخة الاحتياطية فيه
 REQUIRED_CHANNEL = "@m_55wa"  # قناة الاشتراك الإجباري
 
 app = Client("publisher_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
@@ -42,11 +42,12 @@ def load_data():
         except:
             return {"_settings": {"developers": [], "codes": {}, "buttons": {}}}
 
-def save_data(data):
+def save_data(data, backup_to_chat=False):
     with open(DATA_FILE, 'w', encoding='utf-8') as f: 
         json.dump(data, f, ensure_ascii=False, indent=4)
-    # رفع نسخة احتياطية تلقائياً في محادثة المطور الخاصة
-    asyncio.create_task(upload_backup_file())
+    # رفع نسخة للخاص فقط عند الحاجة (مثل إضافة حساب أو مجموعة) لتجنب أي إزعاج
+    if backup_to_chat:
+        asyncio.create_task(upload_backup_file())
 
 async def upload_backup_file():
     try:
@@ -54,24 +55,24 @@ async def upload_backup_file():
             await app.send_document(
                 chat_id=MAIN_ADMIN_USERNAME,
                 document=DATA_FILE,
-                caption="🔄 نسخة احتياطية تلقائية لقاعدة البيانات (حفظ آمن)."
+                caption="🔄 تحديث قاعدة بيانات البوت (حفظ آمن)."
             )
     except Exception as e:
-        print(f"خطأ في رفع النسخة الاحتياطية الخاصة: {e}")
+        print(f"خطأ في رفع النسخة: {e}")
 
-async def restore_backup_from_channel():
-    """سحب أحدث نسخة احتياطية من محادثة المطور الخاصة تلقائياً عند التشغيل وضبطها في المسار الصحيح"""
+async def restore_backup_from_chat():
+    """سحب أحدث نسخة احتياطية من محادثتك الخاصة عند تشغيل البوت لتلافي مسح راندر للملفات"""
     try:
-        print(f"🔄 جاري سحب النسخة الاحتياطية من محادثة المطور الخاصة...")
-        async for message in app.get_chat_history(MAIN_ADMIN_USERNAME, limit=15):
-            if message.document and message.document.file_name == "users_config.json":
+        print("🔄 جاري استعادة البيانات من محادثتك الخاصة...")
+        async for message in app.get_chat_history(MAIN_ADMIN_USERNAME, limit=10):
+            if message.document and message.document.file_name == DATA_FILE:
                 target_path = os.path.abspath(DATA_FILE)
-                downloaded_file = await message.download(file_name=target_path)
-                print(f"✅ تم استعادة قاعدة البيانات بنجاح من محادثة المطور وتم وضعها في: {downloaded_file}")
+                await message.download(file_name=target_path)
+                print("✅ تم استعادة البيانات بنجاح ولن تضيع بياناتك بعد الآن!")
                 return
-        print("⚠️ لم يتم العثور على ملف نسخة احتياطية سابق في محادثة المطور.")
+        print("⚠️ لم يُعثر على نسخة سابقة، سيتم البدء بملف جديد.")
     except Exception as e:
-        print(f"⚠️ خطأ أثناء محاولة سحب النسخة من المحادثة الخاصة: {e}")
+        print(f"⚠️ خطأ في الاستعادة: {e}")
 
 def is_admin(user):
     if user.username and user.username.lower() == MAIN_ADMIN_USERNAME.lower():
@@ -143,6 +144,7 @@ async def background_publisher():
         await asyncio.sleep(10)
         try:
             data = load_data()
+            updated = False
             for user_id, u_data in data.items():
                 if user_id == "_settings": continue
                 if u_data.get("active") and u_data.get("accounts") and u_data.get("groups") and u_data.get("texts"):
@@ -184,25 +186,23 @@ async def background_publisher():
                                                 elif m_type == "video":
                                                     await user_client.send_video(target_chat, t_item.get("file_id"), caption=t_item.get("caption"), reply_markup=markup)
                                             
-                                            fresh_data = load_data()
-                                            if user_id in fresh_data:
-                                                fresh_data[user_id]["stats"]["success"] = fresh_data[user_id]["stats"].get("success", 0) + 1
-                                                save_data(fresh_data)
-                                                
+                                            if user_id in data:
+                                                data[user_id]["stats"]["success"] = data[user_id]["stats"].get("success", 0) + 1
+                                                updated = True
                                             await asyncio.sleep(3)
                                         except Exception as grp_err:
-                                            print(f"فشل الإرسال للمجموعة {target_chat} بسبب: {grp_err}")
-                                            fresh_data = load_data()
-                                            if user_id in fresh_data:
-                                                fresh_data[user_id]["stats"]["failed"] = fresh_data[user_id]["stats"].get("failed", 0) + 1
-                                                save_data(fresh_data)
+                                            if user_id in data:
+                                                data[user_id]["stats"]["failed"] = data[user_id]["stats"].get("failed", 0) + 1
+                                                updated = True
                         except Exception as client_err:
-                            print(f"خطأ في جلسة الحساب: {client_err}")
+                            pass
+                    if updated:
+                        save_data(data, backup_to_chat=False) # حفظ محلي بدون إزعاج بالخاص أثناء النشر
                     
                     actual_delay = random.randint(int(delay), int(delay) + 30)
                     await asyncio.sleep(actual_delay)
         except Exception as e:
-            print(f"خطأ في المحرك: {e}")
+            pass
 
 @app.on_message(filters.command("start"))
 async def start_command(client, message):
@@ -234,7 +234,7 @@ async def start_command(client, message):
         if "is_pro" not in data[user_id]: data[user_id]["is_pro"] = False
     
     data[user_id]["state"] = None
-    save_data(data)
+    save_data(data, backup_to_chat=True) # حفظ مع رفع نسخة للخاص لأنها بداية تفاعل
     
     is_pro = data[user_id].get("is_pro", False)
     welcome_text = f"أهلاً بك يا {message.from_user.first_name}، هذا بوت النشر التلقائي الذكي."
@@ -280,13 +280,13 @@ async def callback_handler(client, call):
                 return
             if g_target not in data[user_id]["groups"]:
                 data[user_id]["groups"].append(g_target)
-                save_data(data)
+                save_data(data, backup_to_chat=True)
             await call.answer("✅ تمت إضافة المجموعة", show_alert=True)
         elif call.data.startswith("tg_rem_"):
             g_target = call.data[7:]
             if g_target in data[user_id]["groups"]:
                 data[user_id]["groups"].remove(g_target)
-                save_data(data)
+                save_data(data, backup_to_chat=True)
             await call.answer("🗑️ تمت إزالة المجموعة", show_alert=True)
         
         if user_id in account_groups_cache:
@@ -309,7 +309,7 @@ async def callback_handler(client, call):
 
     if call.data == "back_main":
         data[user_id]["state"] = None
-        save_data(data)
+        save_data(data, backup_to_chat=False)
         await call.message.edit_text("إليك لوحة التحكم:", reply_markup=main_menu(admin_status, is_pro))
         
     elif call.data == "bot_guide":
@@ -323,7 +323,7 @@ async def callback_handler(client, call):
 
     elif call.data == "redeem_code_prompt":
         data[user_id]["state"] = "waiting_for_code"
-        save_data(data)
+        save_data(data, backup_to_chat=False)
         await call.message.edit_text("🎟️ أرسل كود التفعيل (الاشتراك) الخاص بـ Pro الآن في رسالة جديدة:", reply_markup=back_menu())
 
     elif call.data == "fetch_account_groups":
@@ -366,7 +366,7 @@ async def callback_handler(client, call):
     elif call.data == "admin_create_code":
         if not admin_status: return
         data[user_id]["state"] = "creating_code"
-        save_data(data)
+        save_data(data, backup_to_chat=False)
         await call.message.edit_text("🎟️ أرسل تفاصيل الكود الجديد بالشكل التالي:\n`VIPCODE 30 5`\n(اسم الكود ثم عدد الأيام ثم عدد المستخدمين)", reply_markup=back_menu())
 
     elif call.data == "admin_pro_management":
@@ -381,13 +381,13 @@ async def callback_handler(client, call):
     elif call.data == "add_pro_user":
         if not admin_status: return
         data[user_id]["state"] = "waiting_for_pro_add_id"
-        save_data(data)
+        save_data(data, backup_to_chat=False)
         await call.message.edit_text("➕ أرسل آيدي المستخدم لمنحه Pro:", reply_markup=back_menu())
 
     elif call.data == "remove_pro_user":
         if not admin_status: return
         data[user_id]["state"] = "waiting_for_pro_remove_id"
-        save_data(data)
+        save_data(data, backup_to_chat=False)
         await call.message.edit_text("❌ أرسل آيدي المستخدم لإرجاعه للمجاني:", reply_markup=back_menu())
 
     elif call.data == "list_pro_users":
@@ -407,13 +407,13 @@ async def callback_handler(client, call):
     elif call.data == "admin_broadcast":
         if not admin_status: return
         data[user_id]["state"] = "waiting_for_admin_broadcast"
-        save_data(data)
+        save_data(data, backup_to_chat=False)
         await call.message.edit_text("📢 أرسل رسالة الإذاعة:", reply_markup=back_menu())
 
     elif call.data == "admin_ban_user":
         if not admin_status: return
         data[user_id]["state"] = "waiting_for_ban_user_id"
-        save_data(data)
+        save_data(data, backup_to_chat=False)
         await call.message.edit_text("🚫 أرسل آيدي المستخدم للحظر/إلغاء الحظر:", reply_markup=back_menu())
 
     elif call.data == "show_accounts":
@@ -433,12 +433,12 @@ async def callback_handler(client, call):
             await call.answer("❌ الباقة المجانية تسمح بحساب واحد فقط!", show_alert=True)
             return
         data[user_id]["state"] = "waiting_for_phone"
-        save_data(data)
+        save_data(data, backup_to_chat=False)
         await call.message.edit_text("📱 أرسل رقم هاتفك مع رمز الدولة (+9665xxxxxxxx):", reply_markup=back_menu())
         
     elif call.data == "clear_accounts":
         data[user_id]["accounts"] = []
-        save_data(data)
+        save_data(data, backup_to_chat=True)
         await call.message.edit_text("🗑️ تم حذف جميع الحسابات.", reply_markup=back_menu())
 
     elif call.data == "show_groups":
@@ -461,12 +461,12 @@ async def callback_handler(client, call):
             await call.answer("❌ وصلت للحد الأقصى (5 مجموعات). اشترك في Pro!", show_alert=True)
             return
         data[user_id]["state"] = "waiting_for_group"
-        save_data(data)
+        save_data(data, backup_to_chat=False)
         await call.message.edit_text("📥 أرسل معرف السوبر أو الرابط (مثال: `@Group`):", reply_markup=back_menu())
         
     elif call.data == "toggle_group_pause":
         data[user_id]["state"] = "waiting_for_toggle_group"
-        save_data(data)
+        save_data(data, backup_to_chat=False)
         await call.message.edit_text("🔄 أرسل معرف السوبر لإيقافه مؤقتاً أو إعادة تفعيله:", reply_markup=back_menu())
 
     elif call.data == "show_paused_groups":
@@ -484,7 +484,7 @@ async def callback_handler(client, call):
     elif call.data == "clear_groups":
         data[user_id]["groups"] = []
         data[user_id]["paused_groups"] = []
-        save_data(data)
+        save_data(data, backup_to_chat=True)
         await call.message.edit_text("🗑️ تم تفريغ السوبرات.", reply_markup=back_menu())
 
     elif call.data == "show_texts":
@@ -502,17 +502,17 @@ async def callback_handler(client, call):
 
     elif call.data == "add_text":
         data[user_id]["state"] = "waiting_for_text"
-        save_data(data)
+        save_data(data, backup_to_chat=False)
         await call.message.edit_text("✍️ أرسل نص الرسالة أو الوسائط (مع إمكانية إضافة زر شفاف بنفس الرسالة إذا أردت):\nمثال:\n`النص هنا | زر - https://t.me/...`", reply_markup=back_menu())
         
     elif call.data == "clear_texts":
         data[user_id]["texts"] = []
-        save_data(data)
+        save_data(data, backup_to_chat=True)
         await call.message.edit_text("🗑️ تم حذف الرسائل.", reply_markup=back_menu())
 
     elif call.data == "set_time":
         data[user_id]["state"] = "waiting_for_time"
-        save_data(data)
+        save_data(data, backup_to_chat=False)
         await call.message.edit_text("⏱️ أرسل الفاصل الزمني بالثواني (مثلاً 120):", reply_markup=back_menu())
         
     elif call.data == "start_pub":
@@ -520,12 +520,12 @@ async def callback_handler(client, call):
             await call.answer("❌ يجب إضافة حساب، ورسالة، ومجموعة واحدة أولاً!", show_alert=True)
         else:
             data[user_id]["active"] = True
-            save_data(data)
+            save_data(data, backup_to_chat=True)
             await call.answer("🟢 تم تفعيل النشر التلقائي بنجاح!", show_alert=True)
             
     elif call.data == "stop_pub":
         data[user_id]["active"] = False
-        save_data(data)
+        save_data(data, backup_to_chat=True)
         await call.answer("🔴 تم إيقاف النشر التلقائي.", show_alert=True)
         
     try:
@@ -571,10 +571,10 @@ async def message_handler(client, message):
                 data[user_id]["is_pro"] = True
                 code_data["uses"] += 1
                 code_data.setdefault("used_by", []).append(user_id)
-                save_data(data)
+                save_data(data, backup_to_chat=True)
                 
                 data[user_id]["state"] = None
-                save_data(data)
+                save_data(data, backup_to_chat=False)
                 await message.reply_text("✅ مبروك! تم تفعيل اشتراك Pro بنجاح في حسابك.", reply_markup=main_menu(admin_status, True))
         else:
             await message.reply_text("❌ الكود غير صحيح أو منتهي الصلاحية.")
@@ -596,9 +596,9 @@ async def message_handler(client, message):
                 "uses": 0,
                 "used_by": []
             }
-            save_data(data)
+            save_data(data, backup_to_chat=True)
             data[user_id]["state"] = None
-            save_data(data)
+            save_data(data, backup_to_chat=False)
             await message.reply_text(f"✅ تم إنشاء الكود `{code_str}` بنجاح لمدة {days} أيام ولـ {max_uses} مستخدمين.", reply_markup=main_menu(admin_status, is_pro))
         except Exception:
             await message.reply_text("❌ الصيغة غير صحيحة. أرسل بالشكل التالي تماماً:\n`VIP2026 30 5`\n(الكود ثم عدد الأيام ثم عدد المستخدمين)")
@@ -611,10 +611,10 @@ async def message_handler(client, message):
             data[target_id] = {"groups": [], "paused_groups": [], "delay": 120, "active": False, "accounts": [], "texts": [], "stats": {"success": 0, "failed": 0}, "state": None, "banned": False, "is_pro": True}
         else:
             data[target_id]["is_pro"] = True
-        save_data(data)
+        save_data(data, backup_to_chat=True)
         await message.reply_text(f"⭐ تمت ترقية المستخدم (`{target_id}`) إلى Pro بنجاح!", reply_markup=main_menu(admin_status, is_pro))
         data[user_id]["state"] = None
-        save_data(data)
+        save_data(data, backup_to_chat=False)
         return
 
     elif state == "waiting_for_pro_remove_id":
@@ -622,18 +622,18 @@ async def message_handler(client, message):
         target_id = message.text.strip()
         if target_id in data:
             data[target_id]["is_pro"] = False
-            save_data(data)
+            save_data(data, backup_to_chat=True)
             await message.reply_text(f"👤 تم إرجاع المستخدم (`{target_id}`) للباقة المجانية.", reply_markup=main_menu(admin_status, is_pro))
         else:
             await message.reply_text("❌ المستخدم غير مسجل.")
         data[user_id]["state"] = None
-        save_data(data)
+        save_data(data, backup_to_chat=False)
         return
 
     elif state == "waiting_for_admin_broadcast":
         if not admin_status: return
         data[user_id]["state"] = None
-        save_data(data)
+        save_data(data, backup_to_chat=False)
         success, failed = 0, 0
         status_msg = await message.reply_text("⏳ جاري الإذاعة...")
         all_users = load_data()
@@ -656,7 +656,7 @@ async def message_handler(client, message):
             data[target_id] = {"groups": [], "paused_groups": [], "delay": 120, "active": False, "accounts": [], "texts": [], "stats": {"success": 0, "failed": 0}, "state": None, "banned": False, "is_pro": False}
         new_status = not data[target_id].get("banned", False)
         data[target_id]["banned"] = new_status
-        save_data(data)
+        save_data(data, backup_to_chat=True)
         msg_res = f"🚫 تم حظر (`{target_id}`)." if new_status else f"🟢 تم إلغاء حظر (`{target_id}`)."
         await message.reply_text(msg_res, reply_markup=main_menu(admin_status, is_pro))
         return
@@ -668,19 +668,19 @@ async def message_handler(client, message):
             code_info = await temp_client.send_code(message.text)
             login_attempts[user_id] = {"client": temp_client, "phone": message.text, "hash": code_info.phone_code_hash}
             data[user_id]["state"] = "waiting_for_otp"
-            save_data(data)
+            save_data(data, backup_to_chat=False)
             await message.reply_text("📥 أرسل كود التحقق من تيليجرام الآن:")
         except Exception as e:
             await message.reply_text(f"❌ خطأ: {e}")
             data[user_id]["state"] = None
-            save_data(data)
+            save_data(data, backup_to_chat=False)
         return
 
     elif state == "waiting_for_otp":
         attempt = login_attempts.get(user_id)
         if not attempt:
             data[user_id]["state"] = None
-            save_data(data)
+            save_data(data, backup_to_chat=False)
             return
         try:
             await attempt["client"].sign_in(attempt["phone"], attempt["hash"], message.text)
@@ -691,16 +691,16 @@ async def message_handler(client, message):
             await attempt["client"].disconnect()
             del login_attempts[user_id]
             data[user_id]["state"] = None
-            save_data(data)
+            save_data(data, backup_to_chat=True) # حفظ مع رفع نسخة للخاص لأن تم إضافة حساب جديد هاما
             await message.reply_text("✅ تم ربط الحساب بنجاح!", reply_markup=main_menu(admin_status, is_pro))
         except SessionPasswordNeeded:
             data[user_id]["state"] = "waiting_for_password"
-            save_data(data)
+            save_data(data, backup_to_chat=False)
             await message.reply_text("🔐 أرسل كلمة مرور التحقق بخطوتين:")
         except Exception as e:
             await message.reply_text(f"❌ خطأ: {e}")
             data[user_id]["state"] = None
-            save_data(data)
+            save_data(data, backup_to_chat=False)
         return
 
     elif state == "waiting_for_password":
@@ -714,12 +714,12 @@ async def message_handler(client, message):
             await attempt["client"].disconnect()
             del login_attempts[user_id]
             data[user_id]["state"] = None
-            save_data(data)
+            save_data(data, backup_to_chat=True)
             await message.reply_text("✅ تم ربط الحساب بنجاح!", reply_markup=main_menu(admin_status, is_pro))
         except Exception as e:
             await message.reply_text(f"❌ خطأ: {e}")
             data[user_id]["state"] = None
-            save_data(data)
+            save_data(data, backup_to_chat=False)
         return
 
     elif state == "waiting_for_group":
@@ -732,12 +732,12 @@ async def message_handler(client, message):
             
             data[user_id]["groups"].append(group_input)
             data[user_id]["state"] = None
-            save_data(data)
+            save_data(data, backup_to_chat=True)
             await message.reply_text(f"✅ تم إضافة السوبر: {group_input}", reply_markup=main_menu(admin_status, is_pro))
         except Exception as e:
             await message.reply_text(f"❌ خطأ: {e}")
             data[user_id]["state"] = None
-            save_data(data)
+            save_data(data, backup_to_chat=False)
         return
 
     elif state == "waiting_for_toggle_group":
@@ -752,12 +752,12 @@ async def message_handler(client, message):
                 paused.append(g_input)
                 msg = f"⏸️ تم إيقاف: {g_input}"
             data[user_id]["state"] = None
-            save_data(data)
+            save_data(data, backup_to_chat=True)
             await message.reply_text(msg, reply_markup=main_menu(admin_status, is_pro))
         except Exception as e:
             await message.reply_text(f"❌ خطأ: {e}")
             data[user_id]["state"] = None
-            save_data(data)
+            save_data(data, backup_to_chat=False)
         return
 
     elif state == "waiting_for_text":
@@ -787,27 +787,26 @@ async def message_handler(client, message):
             
             data[user_id]["texts"].append(msg_data)
             data[user_id]["state"] = None
-            save_data(data)
+            save_data(data, backup_to_chat=True)
             await message.reply_text("✅ تم حفظ الرسالة بنجاح (مع الأزرار الشفافة إن وجدت).", reply_markup=main_menu(admin_status, is_pro))
         except Exception as e:
             await message.reply_text(f"❌ خطأ: {e}")
             data[user_id]["state"] = None
-            save_data(data)
+            save_data(data, backup_to_chat=False)
         return
 
     elif state == "waiting_for_time":
         try:
             data[user_id]["delay"] = int(message.text)
             data[user_id]["state"] = None
-            save_data(data)
+            save_data(data, backup_to_chat=True)
             await message.reply_text("✅ تم ضبط الوقت.", reply_markup=main_menu(admin_status, is_pro))
         except Exception as e:
             await message.reply_text(f"❌ أدخل رقماً صحيحاً: {e}")
             data[user_id]["state"] = None
-            save_data(data)
+            save_data(data, backup_to_chat=False)
         return
 
-# --- سيرفر الويب لضمان التشغيل 24/7 على Render ---
 async def handle_ping(reader, writer):
     try:
         await reader.read(100)
@@ -826,14 +825,13 @@ async def main():
     port = int(os.environ.get("PORT", 8080))
     server = await asyncio.start_server(handle_ping, '0.0.0.0', port)
     
-    # بدء تشغيل العميل
     await app.start()
     
-    # استعادة أحدث نسخة احتياطية من محادثة المطور الخاصة قبل تشغيل أي شيء
-    await restore_backup_from_channel()
+    # استعادة البيانات تلقائياً من محادثتك الخاصة عند تشغيل البوت لتجاوز مسح راندر للبيانات
+    await restore_backup_from_chat()
     
     asyncio.create_task(background_publisher())
-    print("البوت يعمل الآن بنجاح على مدار الساعة ويستعيد بياناته من محادثتك الخاصة تلقائياً...")
+    print("البوت يعمل الآن بنجاح مع استعادة البيانات التلقائية وبدون أي إزعاج...")
     await idle()
     await app.stop()
 
