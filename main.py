@@ -15,11 +15,11 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# --- الاعتماد الكامل على متغيرات البيئة ---
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_ID = os.getenv("API_ID")
-API_HASH = os.getenv("API_HASH")
-BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID")
+# --- إعداد التوكن والمعلومات الأساسية ---
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8996776697:AAFquiMkylAqhbf_G5FbGYXSVnVa9LZ4k3A")
+API_ID = os.getenv("API_ID", "33057479")
+API_HASH = os.getenv("API_HASH", "0adc25ac386d50e8ee9f3b987863c4c0")
+BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID", "-1003786345661")
 
 if not BOT_TOKEN or not API_ID or not API_HASH:
     raise ValueError("❌ خطأ: يجب تعيين متغيرات البيئة BOT_TOKEN و API_ID و API_HASH بشكل صحيح!")
@@ -1035,11 +1035,9 @@ async def main():
     
     await app.start()
     
-    # استعادة أحدث نسخة احتياطية عند التشغيل
     if BACKUP_CHAT_ID:
         await restore_config(app)
     
-    # تشغيل مهام الخلفية للنشر والنسخ الاحتياطي الدوري
     asyncio.create_task(background_publisher())
     asyncio.create_task(periodic_backup_worker(app))
     
@@ -1050,3 +1048,4 @@ async def main():
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
+
