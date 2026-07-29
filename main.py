@@ -19,17 +19,22 @@ logging.basicConfig(
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8996776697:AAFquiMkylAqhbf_G5FbGYXSVnVa9LZ4k3A")
 API_ID = os.getenv("API_ID", "33057479")
 API_HASH = os.getenv("API_HASH", "0adc25ac386d50e8ee9f3b987863c4c0")
-BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID", "-1003786345661")
+
+# قراءة معرف قناة النسخ الاحتياطي (يوصى بشدة أن يكون يوزرنيم مثل @m_55wa لتجنب مشاكل in_memory)
+BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID", "@m_55wa")
 
 if not BOT_TOKEN or not API_ID or not API_HASH:
     raise ValueError("❌ خطأ: يجب تعيين متغيرات البيئة BOT_TOKEN و API_ID و API_HASH بشكل صحيح!")
 
 API_ID = int(API_ID)
+
+# معالجة BACKUP_CHAT_ID ليكون رقماً إن كان رقماً، أو يوزرنيم إن كان نصاً
 if BACKUP_CHAT_ID:
-    try:
+    if str(BACKUP_CHAT_ID).lstrip('-').isdigit():
         BACKUP_CHAT_ID = int(BACKUP_CHAT_ID)
-    except ValueError:
-        pass
+    else:
+        if not str(BACKUP_CHAT_ID).startswith("@"):
+            BACKUP_CHAT_ID = "@" + str(BACKUP_CHAT_ID).strip()
 
 MAIN_ADMIN_USERNAME = "scofr"
 REQUIRED_CHANNEL = "@m_55wa"
@@ -96,7 +101,7 @@ def load_data():
             _memory_cache = data
             return data
     except json.JSONDecodeError:
-        logging.exception("❌ تحذير: ملف الإعدادات تالف (JSONDecodeError). يتم الاعتماد على الذاكرة المؤقتة.")
+        logging.exception("❌ تحذير: ملف الإعدادات تالف. يتم الاعتماد على الذاكرة المؤقتة.")
         if _memory_cache is not None:
             return _memory_cache
         temp_file = DATA_FILE + ".tmp"
@@ -107,7 +112,7 @@ def load_data():
                     _memory_cache = data
                     return data
             except Exception:
-                logging.exception("فشل قراءة الملف المؤقت أيضاً")
+                pass
         return {"_settings": {"developers": [], "codes": {}, "buttons": {}}}
     except Exception:
         logging.exception("خطأ أثناء قراءة ملف الإعدادات")
@@ -133,7 +138,6 @@ async def restore_config(client):
         return
     logging.info("[*] جاري فحص ملف الإعدادات محلياً واستعادة النسخة...")
     try:
-        # إجبار بيروجرام على التعرف على قناة النسخ أولاً لتجنب خطأ Peer id invalid
         await client.get_chat(BACKUP_CHAT_ID)
         
         if not os.path.exists(DATA_FILE):
@@ -148,7 +152,7 @@ async def restore_config(client):
                 await latest_backup.download(file_name=DATA_FILE)
                 logging.info(f"[+] تم استعادة أحدث نسخة احتياطية بنجاح من الرسالة رقم {latest_backup.id}!")
     except Exception:
-        logging.exception("خطأ أثناء استعادة النسخة الاحتياطية")
+        logging.exception("خطأ أثناء استعادة النسخة الاحتياطية (تخطي واستمرار التشغيل)")
 
 async def backup_config(client):
     global data_changed
@@ -157,7 +161,6 @@ async def backup_config(client):
         return
     try:
         if os.path.exists(DATA_FILE):
-            # إجبار بيروجرام على التعرف على قناة النسخ لتجنب خطأ Peer id invalid
             await client.get_chat(BACKUP_CHAT_ID)
             
             sent_msg = await client.send_document(
@@ -198,7 +201,7 @@ async def periodic_backup_worker(client):
             if changed_pro:
                 await save_data(data)
         except Exception:
-            logging.exception("خطأ أثناء فحص انتهاء صلاحيات Pro")
+            pass
 
         if data_changed:
             data_changed = False
@@ -266,7 +269,7 @@ async def render_groups_page(message, user_id, data, is_pro):
     try:
         await message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     except Exception:
-        logging.exception("خطأ أثناء تحديث صفحة مجموعات الحساب")
+        pass
 
 async def get_or_create_client(user_id, acc):
     session_str = acc.get("session_string")
@@ -299,7 +302,6 @@ async def get_or_create_client(user_id, acc):
         client_pool[pool_key] = client
         return client
     except Exception:
-        logging.exception(f"خطأ أثناء إنشاء عميل النشر للحساب {pool_key}")
         return None
 
 async def background_publisher():
