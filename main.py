@@ -2,17 +2,26 @@ import os
 import json
 import asyncio
 import random
+import time
 from pyrogram import Client, filters, idle
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 from pyrogram.errors import SessionPasswordNeeded, UserNotParticipant
 from pyrogram.enums import ChatMemberStatus, ChatType
 
-# --- الإعدادات ---
-BOT_TOKEN = "8996776697:AAFquiMkylAqhbf_G5FbGYXSVnVa9LZ4k3A"
-API_ID = 33057479
-API_HASH = "0adc25ac386d50e8ee9f3b987863c4c0"
+# --- الإعدادات الأساسية والمتغيرات البيئية ---
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8996776697:AAFquiMkylAqhbf_G5FbGYXSVnVa9LZ4k3A")
+API_ID = int(os.getenv("API_ID", "33057479"))
+API_HASH = os.getenv("API_HASH", "0adc25ac386d50e8ee9f3b987863c4c0")
 MAIN_ADMIN_USERNAME = "scofr"  # المطور الأساسي
 REQUIRED_CHANNEL = "@m_55wa"  # قناة الاشتراك الإجباري
+
+# قناة النسخ الاحتياطي السحابي (آيدي أو معرف القناة)
+BACKUP_CHANNEL_ID = os.getenv("BACKUP_CHANNEL_ID")
+if BACKUP_CHANNEL_ID:
+    try:
+        BACKUP_CHANNEL_ID = int(BACKUP_CHANNEL_ID)
+    except:
+        pass
 
 app = Client("publisher_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
 DATA_FILE = "users_config.json"
@@ -20,10 +29,13 @@ login_attempts = {}
 account_groups_cache = {}
 
 def load_data():
-    if not os.path.exists(DATA_FILE): return {}
+    if not os.path.exists(DATA_FILE): 
+        return {"_settings": {"developers": [], "codes": {}, "buttons": {}}}
     with open(DATA_FILE, 'r', encoding='utf-8') as f: 
         try:
             data = json.load(f)
+            if "_settings" not in data:
+                data["_settings"] = {"developers": [], "codes": {}, "buttons": {}}
             for uid, udata in data.items():
                 if uid == "_settings": continue
                 if isinstance(udata, dict):
@@ -36,11 +48,25 @@ def load_data():
                     if "is_pro" not in udata: udata["is_pro"] = False
             return data
         except:
-            return {}
+            return {"_settings": {"developers": [], "codes": {}, "buttons": {}}}
 
 def save_data(data):
     with open(DATA_FILE, 'w', encoding='utf-8') as f: 
         json.dump(data, f, ensure_ascii=False, indent=4)
+    # رفع نسخة احتياطية سحابية تلقائياً لقناة الباك آب
+    if BACKUP_CHANNEL_ID:
+        asyncio.create_task(upload_backup_file())
+
+async def upload_backup_file():
+    try:
+        if os.path.exists(DATA_FILE):
+            await app.send_document(
+                chat_id=BACKUP_CHANNEL_ID,
+                document=DATA_FILE,
+                caption="🔄 تحديث نسخة احتياطية لقاعدة البيانات تلقائياً."
+            )
+    except Exception as e:
+        print(f"خطأ في رفع النسخة الاحتياطية السحابية: {e}")
 
 def is_admin(user):
     if user.username and user.username.lower() == MAIN_ADMIN_USERNAME.lower():
@@ -69,7 +95,7 @@ def main_menu(is_admin_user=False, is_pro=False):
         [InlineKeyboardButton("👥 السوبرات", callback_data="show_groups"), InlineKeyboardButton("🌐 مجموعات الحساب", callback_data="fetch_account_groups")],
         [InlineKeyboardButton("⏸️ المجموعات المؤقتة", callback_data="show_paused_groups"), InlineKeyboardButton("📊 الإحصائيات", callback_data="show_stats")],
         [InlineKeyboardButton("⏱️ ضبط الوقت", callback_data="set_time"), InlineKeyboardButton("✉️ رسائل النشر", callback_data="show_texts")],
-        [InlineKeyboardButton("📖 شرح البوت", callback_data="bot_guide")],
+        [InlineKeyboardButton("🎟️ استبدال كود Pro", callback_data="redeem_code_prompt"), InlineKeyboardButton("📖 شرح البوت", callback_data="bot_guide")],
         [InlineKeyboardButton("🔴 إيقاف النشر", callback_data="stop_pub"), InlineKeyboardButton("🟢 بدء النشر", callback_data="start_pub")],
         [InlineKeyboardButton("👑 ترقية لـ Pro / الدعم", url=f"https://t.me/{MAIN_ADMIN_USERNAME}")]
     ]
@@ -131,7 +157,6 @@ async def background_publisher():
                                     if group in paused_groups:
                                         continue
                                     
-                                    # تحويل الآيدي الرقمي إلى int لتجنب خطأ Pyrogram
                                     try:
                                         target_chat = int(group) if (group.isdigit() or (group.startswith("-") and group[1:].isdigit())) else group
                                     except:
@@ -205,8 +230,7 @@ async def start_command(client, message):
     save_data(data)
     
     is_pro = data[user_id].get("is_pro", False)
-    welcome_template = data.get("_settings", {}).get("welcome_message", "أهلاً بك يا {name}، هذا بوت النشر التلقائي الذكي.")
-    welcome_text = welcome_template.replace("{name}", message.from_user.first_name)
+    welcome_text = f"أهلاً بك يا {message.from_user.first_name}، هذا بوت النشر التلقائي الذكي."
     
     if is_pro:
         welcome_text += "\n\n⭐ حسابك مفعل على **باقة Pro المدفوعة** (مميزات غير محدودة)."
@@ -288,6 +312,11 @@ async def callback_handler(client, call):
         )
         await call.message.edit_text(guide_text, reply_markup=back_menu())
 
+    elif call.data == "redeem_code_prompt":
+        data[user_id]["state"] = "waiting_for_code"
+        save_data(data)
+        await call.message.edit_text("🎟️ أرسل كود التفعيل (الاشتراك) الخاص بـ Pro الآن في رسالة جديدة:", reply_markup=back_menu())
+
     elif call.data == "fetch_account_groups":
         accounts = data[user_id].get("accounts", [])
         if not accounts:
@@ -320,11 +349,16 @@ async def callback_handler(client, call):
         if not admin_status: return
         admin_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("📊 الأعضاء", callback_data="admin_member_count"), InlineKeyboardButton("📢 إذاعة", callback_data="admin_broadcast")],
-            [InlineKeyboardButton("⭐ إدارة Pro", callback_data="admin_pro_management")],
-            [InlineKeyboardButton("👥 المطورين", callback_data="admin_developers"), InlineKeyboardButton("🚫 حظر/إلغاء", callback_data="admin_ban_user")],
-            [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
+            [InlineKeyboardButton("⭐ إدارة Pro المباشرة", callback_data="admin_pro_management"), InlineKeyboardButton("🎟️ إنشاء كود Pro", callback_data="admin_create_code")],
+            [InlineKeyboardButton("🚫 حظر/إلغاء", callback_data="admin_ban_user"), InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
         ])
         await call.message.edit_text("👑 **لوحة تحكم الأدمن:**", reply_markup=admin_kb)
+
+    elif call.data == "admin_create_code":
+        if not admin_status: return
+        data[user_id]["state"] = "creating_code"
+        save_data(data)
+        await call.message.edit_text("🎟️ أرسل تفاصيل الكود الجديد بالشكل التالي:\n`VIPCODE 30 5`\n(اسم الكود ثم عدد الأيام ثم عدد المستخدمين)", reply_markup=back_menu())
 
     elif call.data == "admin_pro_management":
         if not admin_status: return
@@ -460,7 +494,7 @@ async def callback_handler(client, call):
     elif call.data == "add_text":
         data[user_id]["state"] = "waiting_for_text"
         save_data(data)
-        await call.message.edit_text("✍️ أرسل نص الرسالة أو الوسائط (مع إمكانية إضافة زر شفاف بنفس الرسالة إذا أردت):", reply_markup=back_menu())
+        await call.message.edit_text("✍️ أرسل نص الرسالة أو الوسائط (مع إمكانية إضافة زر شفاف بنفس الرسالة إذا أردت):\nمثال:\n`النص هنا | زر - https://t.me/...`", reply_markup=back_menu())
         
     elif call.data == "clear_texts":
         data[user_id]["texts"] = []
@@ -511,7 +545,55 @@ async def message_handler(client, message):
     if user_id not in data or not data[user_id].get("state"): return
     state = data[user_id]["state"]
 
-    if state == "waiting_for_pro_add_id":
+    if state == "waiting_for_code":
+        code_text = message.text.strip()
+        settings = data.setdefault("_settings", {})
+        codes = settings.setdefault("codes", {})
+        
+        if code_text in codes:
+            code_data = codes[code_text]
+            if code_data["uses"] >= code_data["max_uses"]:
+                await message.reply_text("❌ هذا الكود استُخدم بالكامل ووصل للحد الأقصى.")
+            elif user_id in code_data.get("used_by", []):
+                await message.reply_text("⚠️ لقد قمت باستخدام هذا الكود مسبقاً!")
+            else:
+                data[user_id]["is_pro"] = True
+                code_data["uses"] += 1
+                code_data.setdefault("used_by", []).append(user_id)
+                save_data(data)
+                
+                data[user_id]["state"] = None
+                save_data(data)
+                await message.reply_text("✅ مبروك! تم تفعيل اشتراك Pro بنجاح في حسابك.", reply_markup=main_menu(admin_status, True))
+        else:
+            await message.reply_text("❌ الكود غير صحيح أو منتهي الصلاحية.")
+        return
+
+    elif state == "creating_code":
+        if not admin_status: return
+        try:
+            parts = message.text.split()
+            code_str = parts[0]
+            days = int(parts[1])
+            max_uses = int(parts[2])
+            
+            settings = data.setdefault("_settings", {})
+            codes = settings.setdefault("codes", {})
+            codes[code_str] = {
+                "days": days,
+                "max_uses": max_uses,
+                "uses": 0,
+                "used_by": []
+            }
+            save_data(data)
+            data[user_id]["state"] = None
+            save_data(data)
+            await message.reply_text(f"✅ تم إنشاء الكود `{code_str}` بنجاح لمدة {days} أيام ولـ {max_uses} مستخدمين.", reply_markup=main_menu(admin_status, is_pro))
+        except Exception:
+            await message.reply_text("❌ الصيغة غير صحيحة. أرسل بالشكل التالي تماماً:\n`VIP2026 30 5`\n(الكود ثم عدد الأيام ثم عدد المستخدمين)")
+        return
+
+    elif state == "waiting_for_pro_add_id":
         if not admin_status: return
         target_id = message.text.strip()
         if target_id not in data:
@@ -714,7 +796,7 @@ async def message_handler(client, message):
             save_data(data)
         return
 
-# --- سيرفر الويب لـ Render ---
+# --- سيرفر الويب لضمان التشغيل 24/7 على Render ---
 async def handle_ping(reader, writer):
     try:
         await reader.read(100)
@@ -734,7 +816,7 @@ async def main():
     server = await asyncio.start_server(handle_ping, '0.0.0.0', port)
     asyncio.create_task(background_publisher())
     await app.start()
-    print("البوت يعمل الآن بنجاح...")
+    print("البوت يعمل الآن بنجاح على مدار الساعة...")
     await idle()
     await app.stop()
 
