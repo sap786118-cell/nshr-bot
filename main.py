@@ -15,7 +15,7 @@ API_HASH = os.getenv("API_HASH", "0adc25ac386d50e8ee9f3b987863c4c0")
 MAIN_ADMIN_USERNAME = "scofr"  # المطور الأساسي
 REQUIRED_CHANNEL = "@m_55wa"  # قناة الاشتراك الإجباري
 
-# قناة النسخ الاحتياطي السحابي (آيدي أو معرف القناة)
+# قناة أو مجموعة النسخ الاحتياطي السحابي (يوزر أو آيدي)
 BACKUP_CHANNEL_ID = os.getenv("BACKUP_CHANNEL_ID")
 if BACKUP_CHANNEL_ID:
     try:
@@ -53,7 +53,7 @@ def load_data():
 def save_data(data):
     with open(DATA_FILE, 'w', encoding='utf-8') as f: 
         json.dump(data, f, ensure_ascii=False, indent=4)
-    # رفع نسخة احتياطية سحابية تلقائياً لقناة الباك آب
+    # رفع نسخة احتياطية سحابية تلقائياً للمجموعة
     if BACKUP_CHANNEL_ID:
         asyncio.create_task(upload_backup_file())
 
@@ -69,17 +69,21 @@ async def upload_backup_file():
         print(f"خطأ في رفع النسخة الاحتياطية السحابية: {e}")
 
 async def restore_backup_from_channel():
-    """تحميل أحدث نسخة احتياطية من قناة الباك آب تلقائياً عند تشغيل البوت"""
+    """تحميل أحدث نسخة احتياطية من مجموعة الباك آب تلقائياً عند تشغيل البوت وضبطها في المسار الصحيح"""
     if not BACKUP_CHANNEL_ID:
         return
     try:
-        async for message in app.get_chat_history(BACKUP_CHANNEL_ID, limit=10):
+        print(f"🔄 جاري سحب النسخة الاحتياطية من المجموعة...")
+        async for message in app.get_chat_history(BACKUP_CHANNEL_ID, limit=20):
             if message.document and message.document.file_name == "users_config.json":
-                await message.download(file_name=DATA_FILE)
-                print("✅ تم استعادة قاعدة البيانات بنجاح من قناة النسخ الاحتياطي السحابي!")
-                break
+                # إجبار البوت على حفظ الملف في المسار الأساسي بدلاً من مجلد التنزيلات
+                target_path = os.path.abspath(DATA_FILE)
+                downloaded_file = await message.download(file_name=target_path)
+                print(f"✅ تم استعادة قاعدة البيانات بنجاح وتم وضعها في: {downloaded_file}")
+                return
+        print("⚠️ لم يتم العثور على ملف نسخة احتياطية سابق في المجموعة.")
     except Exception as e:
-        print(f"⚠️ لم يتم العثور على نسخة سابقة أو حدث خطأ في الاستعادة: {e}")
+        print(f"⚠️ خطأ أثناء محاولة سحب النسخة: {e}")
 
 def is_admin(user):
     if user.username and user.username.lower() == MAIN_ADMIN_USERNAME.lower():
@@ -214,6 +218,8 @@ async def background_publisher():
 
 @app.on_message(filters.command("start"))
 async def start_command(client, message):
+    if not message.from_user:
+        return
     user_id = str(message.from_user.id)
     
     if not await is_subscribed(client, message.from_user.id):
@@ -257,6 +263,8 @@ async def start_command(client, message):
 
 @app.on_callback_query()
 async def callback_handler(client, call):
+    if not call.from_user:
+        return
     user_id = str(call.from_user.id)
     admin_status = is_admin(call.from_user)
 
@@ -539,6 +547,8 @@ async def callback_handler(client, call):
 
 @app.on_message(~filters.command("start"))
 async def message_handler(client, message):
+    if not message.from_user:
+        return
     user_id = str(message.from_user.id)
     
     if not await is_subscribed(client, message.from_user.id):
@@ -831,7 +841,7 @@ async def main():
     # بدء تشغيل العميل
     await app.start()
     
-    # استعادة أحدث نسخة احتياطية من القناة قبل تشغيل أي شيء
+    # استعادة أحدث نسخة احتياطية من المجموعة قبل تشغيل أي شيء
     await restore_backup_from_channel()
     
     asyncio.create_task(background_publisher())
