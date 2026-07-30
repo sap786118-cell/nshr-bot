@@ -4,9 +4,13 @@ import asyncio
 import random
 import time
 import logging
+import copy
+import base64
+import hashlib
+from cryptography.fernet import Fernet
 from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
-from pyrogram.errors import SessionPasswordNeeded, UserNotParticipant
+from pyrogram.errors import SessionPasswordNeeded, UserNotParticipant, FloodWait
 from pyrogram.enums import ChatMemberStatus, ChatType
 
 # --- إعداد التسجيل والأخطاء ---
@@ -15,28 +19,48 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# --- إعداد التوكن والمعلومات الأساسية ---
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8996776697:AAFquiMkylAqhbf_G5FbGYXSVnVa9LZ4k3A")
-API_ID = os.getenv("API_ID", "33057479")
-API_HASH = os.getenv("API_HASH", "0adc25ac386d50e8ee9f3b987863c4c0")
-BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID", "-1003786345661")
+# --- معلومات الاتصال والتوكن المضمنة مباشرة ---
+BOT_TOKEN = "8996776697:AAFquiMkylAqhbf_G5FbGYXSVnVa9LZ4k3A"
+API_ID = 33057479
+API_HASH = "0adc25ac386d50e8ee9f3b987863c4c0"
 
-if not BOT_TOKEN or not API_ID or not API_HASH:
-    raise ValueError("❌ خطأ: يجب تعيين متغيرات البيئة BOT_TOKEN و API_ID و API_HASH بشكل صحيح!")
+# إعداد مفتاح التشفير الآمن لجلسات المستخدمين
+def get_fernet():
+    secret = BOT_TOKEN
+    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
+    return Fernet(key)
 
-API_ID = int(API_ID)
-if BACKUP_CHAT_ID:
+def encrypt_session(val):
+    if not val or not isinstance(val, str):
+        return val
     try:
+        return get_fernet().encrypt(val.encode()).decode()
+    except Exception:
+        return val
+
+def decrypt_session(val):
+    if not val or not isinstance(val, str):
+        return val
+    try:
+        return get_fernet().decrypt(val.encode()).decode()
+    except Exception:
+        return val
+
+# قراءة معرف قناة النسخ الاحتياطي
+BACKUP_CHAT_ID = "@m_55wa"
+if BACKUP_CHAT_ID:
+    if str(BACKUP_CHAT_ID).lstrip('-').isdigit():
         BACKUP_CHAT_ID = int(BACKUP_CHAT_ID)
-    except ValueError:
-        pass
+    else:
+        if not str(BACKUP_CHAT_ID).startswith("@"):
+            BACKUP_CHAT_ID = "@" + str(BACKUP_CHAT_ID).strip()
 
 MAIN_ADMIN_USERNAME = "scofr"
 REQUIRED_CHANNEL = "@m_55wa"
 
 app = Client("publisher_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
 DATA_FILE = "users_config.json"
-BACKUP_CAPTION = "🔄 نسخة احتياطية تلقائية لملف الإعدادات"
+BACKUP_CAPTION = "🔄 نسخة احتياطية تلقائية لملف الإعدادات (مشفرة وآمنة)"
 data_changed = False
 login_attempts = {}
 account_groups_cache = {}
@@ -49,10 +73,19 @@ async def save_data(data):
     global data_changed, _memory_cache
     async with data_lock:
         _memory_cache = data
+        data_to_save = copy.deepcopy(data)
+        
+        for uid, udata in data_to_save.items():
+            if uid == "_settings": continue
+            if isinstance(udata, dict) and "accounts" in udata:
+                for acc in udata["accounts"]:
+                    if "session_string" in acc and acc["session_string"]:
+                        acc["session_string"] = encrypt_session(acc["session_string"])
+
         temp_file = DATA_FILE + ".tmp"
         try:
             with open(temp_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
+                json.dump(data_to_save, f, ensure_ascii=False, indent=4)
             os.replace(temp_file, DATA_FILE)
             data_changed = True
         except Exception:
@@ -89,6 +122,10 @@ def load_data():
                     udata.setdefault("is_pro", False)
                     udata.setdefault("pro_expires_at", 0)
                     
+                    for acc in udata["accounts"]:
+                        if "session_string" in acc and acc["session_string"]:
+                            acc["session_string"] = decrypt_session(acc["session_string"])
+                    
                     if udata.get("is_pro", False) and udata.get("pro_expires_at", 0) > 0:
                         if current_time > udata["pro_expires_at"]:
                             udata["is_pro"] = False
@@ -96,7 +133,7 @@ def load_data():
             _memory_cache = data
             return data
     except json.JSONDecodeError:
-        logging.exception("❌ تحذير: ملف الإعدادات تالف (JSONDecodeError). يتم الاعتماد على الذاكرة المؤقتة.")
+        logging.exception("❌ تحذير: ملف الإعدادات تالف. يتم محاولة استعادة النسخة من الملف المؤقت.")
         if _memory_cache is not None:
             return _memory_cache
         temp_file = DATA_FILE + ".tmp"
@@ -104,10 +141,15 @@ def load_data():
             try:
                 with open(temp_file, 'r', encoding='utf-8') as tf:
                     data = json.load(tf)
+                    for uid, udata in data.items():
+                        if uid != "_settings" and isinstance(udata, dict):
+                            for acc in udata.get("accounts", []):
+                                if "session_string" in acc:
+                                    acc["session_string"] = decrypt_session(acc["session_string"])
                     _memory_cache = data
                     return data
             except Exception:
-                logging.exception("فشل قراءة الملف المؤقت أيضاً")
+                pass
         return {"_settings": {"developers": [], "codes": {}, "buttons": {}}}
     except Exception:
         logging.exception("خطأ أثناء قراءة ملف الإعدادات")
@@ -119,29 +161,26 @@ def normalize_group_id(g):
     if not g:
         return ""
     g_str = str(g).strip()
-    if "t.me/" in g_str:
-        g_str = "@" + g_str.split("t.me/")[-1].strip("/")
-    if g_str.startswith("https://t.me/"):
-        g_str = "@" + g_str.split("https://t.me/")[-1].strip("/")
-    if not g_str.startswith("@") and not g_str.startswith("-") and not g_str.isdigit():
-        g_str = "@" + g_str
-    return g_str
+    if "https://t.me/" in g_str:
+        g_str = g_str.split("https://t.me/")[-1].strip("/")
+    elif "t.me/" in g_str:
+        g_str = g_str.split("t.me/")[-1].strip("/")
+    
+    if g_str.startswith("+") or g_str.startswith("@") or (g_str.startswith("-") and g_str[1:].isdigit()) or g_str.isdigit():
+        return g_str
+    return "@" + g_str
 
 async def restore_config(client):
     if not BACKUP_CHAT_ID:
-        logging.info("[i] لم يتم تعيين BACKUP_CHAT_ID، الاعتماد على التخزين المحلي فقط.")
         return
     logging.info("[*] جاري فحص ملف الإعدادات محلياً واستعادة النسخة...")
     try:
-        # إجبار بيروجرام على التعرف على قناة النسخ أولاً لتجنب خطأ Peer id invalid
         await client.get_chat(BACKUP_CHAT_ID)
-        
         if not os.path.exists(DATA_FILE):
             backups = []
             async for message in client.get_chat_history(BACKUP_CHAT_ID, limit=50):
                 if message.document and message.document.file_name == DATA_FILE:
                     backups.append(message)
-            
             if backups:
                 backups.sort(key=lambda m: m.id, reverse=True)
                 latest_backup = backups[0]
@@ -157,22 +196,19 @@ async def backup_config(client):
         return
     try:
         if os.path.exists(DATA_FILE):
-            # إجبار بيروجرام على التعرف على قناة النسخ لتجنب خطأ Peer id invalid
             await client.get_chat(BACKUP_CHAT_ID)
-            
             sent_msg = await client.send_document(
                 chat_id=BACKUP_CHAT_ID,
                 document=DATA_FILE,
                 caption=BACKUP_CAPTION
             )
             logging.info("[+] تم رفع النسخة الاحتياطية الجديدة بنجاح إلى قناة النسخ.")
-            
             try:
                 async for message in client.get_chat_history(BACKUP_CHAT_ID, limit=20):
                     if message.id != sent_msg.id and message.document and message.document.file_name == DATA_FILE and message.caption == BACKUP_CAPTION:
                         await client.delete_messages(BACKUP_CHAT_ID, message.id)
             except Exception:
-                logging.exception("خطأ أثناء حذف النسخة الاحتياطية القديمة")
+                pass
         else:
             data_changed = False
     except Exception:
@@ -198,7 +234,7 @@ async def periodic_backup_worker(client):
             if changed_pro:
                 await save_data(data)
         except Exception:
-            logging.exception("خطأ أثناء فحص انتهاء صلاحيات Pro")
+            pass
 
         if data_changed:
             data_changed = False
@@ -252,11 +288,11 @@ async def render_groups_page(message, user_id, data, is_pro):
     groups_list = account_groups_cache.get(user_id, [])
     user_groups = data[user_id].get("groups", [])
     keyboard = []
-    for g in groups_list[:25]:
+    for idx, g in enumerate(groups_list[:25]):
         g_identifier = normalize_group_id(g["username"] if not g["id"].startswith("-100") else g["id"])
         is_added = g_identifier in user_groups or g["id"] in user_groups
         btn_text = "🗑️ حذف" if is_added else "➕ إضافة"
-        callback_val = f"tg_rem_{g_identifier}" if is_added else f"tg_add_{g_identifier}"
+        callback_val = f"tg_rem_{idx}" if is_added else f"tg_add_{idx}"
         keyboard.append([
             InlineKeyboardButton(g["title"], callback_data="none_click"),
             InlineKeyboardButton(btn_text, callback_data=callback_val)
@@ -266,7 +302,7 @@ async def render_groups_page(message, user_id, data, is_pro):
     try:
         await message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     except Exception:
-        logging.exception("خطأ أثناء تحديث صفحة مجموعات الحساب")
+        pass
 
 async def get_or_create_client(user_id, acc):
     session_str = acc.get("session_string")
@@ -299,7 +335,7 @@ async def get_or_create_client(user_id, acc):
         client_pool[pool_key] = client
         return client
     except Exception:
-        logging.exception(f"خطأ أثناء إنشاء عميل النشر للحساب {pool_key}")
+        logging.exception(f"خطأ في إنشاء جلسة Worker لـ {pool_key}")
         return None
 
 async def background_publisher():
@@ -357,6 +393,8 @@ async def background_publisher():
                                                 data[user_id]["stats"]["success"] = data[user_id]["stats"].get("success", 0) + 1
                                                 updated = True
                                             await asyncio.sleep(3)
+                                        except FloodWait as fw:
+                                            await asyncio.sleep(fw.value)
                                         except Exception:
                                             if user_id in data:
                                                 data[user_id]["stats"]["failed"] = data[user_id]["stats"].get("failed", 0) + 1
@@ -449,28 +487,39 @@ async def callback_handler(client, call):
         if call.data.startswith("tg_add_") or call.data.startswith("tg_rem_"):
             data = load_data()
             is_pro = data.get(user_id, {}).get("is_pro", False)
-            if call.data.startswith("tg_add_"):
-                g_target = normalize_group_id(call.data[7:])
-                if not is_pro and len(data[user_id].get("groups", [])) >= 5:
-                    await call.answer("❌ وصلت للحد الأقصى في الباقة المجانية (5 مجموعات). اشترك في Pro!", show_alert=True)
-                    answered = True
-                    return
-                if g_target not in data[user_id]["groups"]:
-                    data[user_id]["groups"].append(g_target)
-                    await save_data(data)
-                await call.answer("✅ تمت إضافة المجموعة", show_alert=True)
+            try:
+                parts = call.data.split("_")
+                action = parts[1]
+                idx = int(parts[2])
+                groups_list = account_groups_cache.get(user_id, [])
+                if idx < len(groups_list):
+                    g = groups_list[idx]
+                    g_target = normalize_group_id(g["username"] if not g["id"].startswith("-100") else g["id"])
+                    
+                    if action == "add":
+                        if not is_pro and len(data[user_id].get("groups", [])) >= 5:
+                            await call.answer("❌ وصلت للحد الأقصى في الباقة المجانية (5 مجموعات). اشترك في Pro!", show_alert=True)
+                            answered = True
+                            return
+                        if g_target not in data[user_id]["groups"]:
+                            data[user_id]["groups"].append(g_target)
+                            await save_data(data)
+                        await call.answer("✅ تمت إضافة المجموعة", show_alert=True)
+                        answered = True
+                    elif action == "rem":
+                        if g_target in data[user_id]["groups"]:
+                            data[user_id]["groups"].remove(g_target)
+                            await save_data(data)
+                        await call.answer("🗑️ تمت إزالة المجموعة", show_alert=True)
+                        answered = True
+                    
+                    if user_id in account_groups_cache:
+                        await render_groups_page(call.message, user_id, data, is_pro)
+                return
+            except Exception:
+                await call.answer("❌ حدث خطأ", show_alert=True)
                 answered = True
-            elif call.data.startswith("tg_rem_"):
-                g_target = normalize_group_id(call.data[7:])
-                if g_target in data[user_id]["groups"]:
-                    data[user_id]["groups"].remove(g_target)
-                    await save_data(data)
-                await call.answer("🗑️ تمت إزالة المجموعة", show_alert=True)
-                answered = True
-            
-            if user_id in account_groups_cache:
-                await render_groups_page(call.message, user_id, data, is_pro)
-            return
+                return
 
         if not await is_subscribed(client, call.from_user.id):
             await call.answer("❌ يجب عليك الاشتراك في القناة أولاً!", show_alert=True)
@@ -765,10 +814,9 @@ async def message_handler(client, message):
                 data[user_id]["pro_expires_at"] = expires_at
                 code_data["uses"] += 1
                 code_data.setdefault("used_by", []).append(user_id)
-                await save_data(data)
-                
                 data[user_id]["state"] = None
                 await save_data(data)
+                
                 await message.reply_text(f"✅ مبروك! تم تفعيل اشتراك Pro بنجاح لمدة {days} يوماً.", reply_markup=main_menu(admin_status, True))
         else:
             await message.reply_text("❌ الكود غير صحيح أو منتهي الصلاحية.")
@@ -790,7 +838,6 @@ async def message_handler(client, message):
                 "uses": 0,
                 "used_by": []
             }
-            await save_data(data)
             data[user_id]["state"] = None
             await save_data(data)
             await message.reply_text(f"✅ تم إنشاء الكود `{code_str}` بنجاح لمدة {days} أيام ولـ {max_uses} مستخدمين.", reply_markup=main_menu(admin_status, is_pro))
@@ -807,10 +854,9 @@ async def message_handler(client, message):
         else:
             data[target_id]["is_pro"] = True
             data[target_id]["pro_expires_at"] = expires_at
-        await save_data(data)
-        await message.reply_text(f"⭐ تمت ترقية المستخدم (`{target_id}`) إلى Pro لمدة 30 يوماً بنجاح!", reply_markup=main_menu(admin_status, is_pro))
         data[user_id]["state"] = None
         await save_data(data)
+        await message.reply_text(f"⭐ تمت ترقية المستخدم (`{target_id}`) إلى Pro لمدة 30 يوماً بنجاح!", reply_markup=main_menu(admin_status, is_pro))
         return
 
     elif state == "waiting_for_pro_remove_id":
@@ -884,6 +930,7 @@ async def message_handler(client, message):
         if not attempt:
             data[user_id]["state"] = None
             await save_data(data)
+            await message.reply_text("❌ انتهت الجلسة، يرجى المحاولة مجدداً.", reply_markup=main_menu(admin_status, is_pro))
             return
         try:
             await attempt["client"].sign_in(attempt["phone"], attempt["hash"], message.text)
@@ -894,6 +941,10 @@ async def message_handler(client, message):
             data[user_id]["state"] = None
             await save_data(data)
             await message.reply_text("✅ تم ربط الحساب بنجاح!", reply_markup=main_menu(admin_status, is_pro))
+            if attempt.get("client") and attempt["client"].is_connected:
+                await attempt["client"].disconnect()
+            if user_id in login_attempts:
+                del login_attempts[user_id]
         except SessionPasswordNeeded:
             data[user_id]["state"] = "waiting_for_password"
             await save_data(data)
@@ -903,7 +954,6 @@ async def message_handler(client, message):
             await message.reply_text(f"❌ خطأ: {e}")
             data[user_id]["state"] = None
             await save_data(data)
-        finally:
             try:
                 if attempt.get("client") and attempt["client"].is_connected:
                     await attempt["client"].disconnect()
@@ -918,6 +968,7 @@ async def message_handler(client, message):
         if not attempt:
             data[user_id]["state"] = None
             await save_data(data)
+            await message.reply_text("❌ انتهت صلاحية جلسة تسجيل الدخول، حاول مجدداً.", reply_markup=main_menu(admin_status, is_pro))
             return
         try:
             await attempt["client"].check_password(message.text)
@@ -945,10 +996,22 @@ async def message_handler(client, message):
     elif state == "waiting_for_group":
         try:
             group_input = normalize_group_id(message.text.strip())
-            data[user_id]["groups"].append(group_input)
+            groups_list = data[user_id].setdefault("groups", [])
+            
+            if not is_pro and len(groups_list) >= 5:
+                await message.reply_text("❌ وصلت للحد الأقصى في الباقة المجانية (5 مجموعات). اشترك في Pro!", reply_markup=main_menu(admin_status, is_pro))
+                data[user_id]["state"] = None
+                await save_data(data)
+                return
+            
+            if group_input in groups_list:
+                await message.reply_text("⚠️ هذه المجموعة مضافة مسبقاً!", reply_markup=main_menu(admin_status, is_pro))
+            else:
+                groups_list.append(group_input)
+                await message.reply_text(f"✅ تم إضافة السوبر: {group_input}", reply_markup=main_menu(admin_status, is_pro))
+            
             data[user_id]["state"] = None
             await save_data(data)
-            await message.reply_text(f"✅ تم إضافة السوبر: {group_input}", reply_markup=main_menu(admin_status, is_pro))
         except Exception as e:
             await message.reply_text(f"❌ خطأ: {e}")
             data[user_id]["state"] = None
