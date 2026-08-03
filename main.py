@@ -12,8 +12,7 @@ from aiohttp import web
 from cryptography.fernet import Fernet
 from pyrogram import Client, filters, idle
 from pyrogram.types import (
-    InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery, 
-    PreCheckoutQuery, LabeledPrice
+    InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 )
 from pyrogram.errors import (
     SessionPasswordNeeded, UserNotParticipant, FloodWait, 
@@ -271,7 +270,6 @@ def normalize_group_id(g):
 async def main_menu(is_admin_user=False, is_pro=False):
     pro_badge = " ⭐ [Pro]" if is_pro else " 👤 [مجاني]"
     
-    # جلب أسماء الأزرار المخصصة إن وجدت
     btn_acc = await get_setting("btn_acc", "👤 حساباتي")
     btn_add_acc = await get_setting("btn_add_acc", "➕ إضافة حساب")
     btn_grps = await get_setting("btn_grps", "👥 المجموعات")
@@ -482,7 +480,6 @@ def setup_handlers(bot_app):
         admin_flag = await is_admin(message.from_user)
         is_pro = bool(user["is_pro"])
 
-        # جلب الرسالة الترحيبية المخصصة
         welcome_template = await get_setting("welcome_msg", "أهلاً بك **{name}** في بوت النشر التلقائي المطور!\n\n{pro_status}")
         pro_txt = "⭐ **نوع الاشتراك:** `Pro`" if is_pro else "👤 **نوع الاشتراك:** `مجاني`"
         txt = welcome_template.format(name=fname, pro_status=pro_txt)
@@ -537,7 +534,7 @@ def setup_handlers(bot_app):
             )
             await call.message.edit_text(guide, reply_markup=back_menu())
 
-        # ==================== قسم ميزات Pro والشراء الفوري بالنجوم ====================
+        # ==================== قسم ميزات Pro والاشتراك ====================
         elif call.data == "pro_features_info":
             pro_info_txt = (
                 "🚀 **مميزات باقة برو (Pro) الفائقة:**\n\n"
@@ -546,38 +543,14 @@ def setup_handlers(bot_app):
                 "✍️ **محاكاة النشر البشري:** إظهار حالة (جاري الكتابة...) قبل إرسال الرسالة.\n"
                 "⚡ **سرعة ومرونة:** إضافة عدد لا محدود من الجروبات والرسائل بدون قيود.\n"
                 "🛡️ **حماية مضاعفة:** تقليل التأخيرات وتجنب حظر التليجرام الذكي.\n\n"
-                "💰 **أسعار الاشتراك الحصرية:**\n"
-                "• 🗓️ **شهر واحد:** 50 نجمة ⭐️\n"
-                "• 🗓️ **شهرين:** 150 نجمة ⭐️\n\n"
-                "👇 **اشترك الآن فوراً وتلقائياً عبر زر النجوم الشفاف أدناه:**"
+                "👇 **للإشتراك والتفعيل المباشر أو ادخال كود تفعيل:**"
             )
             pro_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("💳 الاشتراك بـ Pro (50 نجمة / شهر)", callback_data="buy_pro_1m")],
-                [InlineKeyboardButton("💳 الاشتراك بـ Pro (150 نجمة / شهرين)", callback_data="buy_pro_2m")],
+                [InlineKeyboardButton("🎟️ تفعيل كود Pro", callback_data="redeem_code_prompt")],
+                [InlineKeyboardButton("💳 التواصل لشراء اشتراك", url=f"https://t.me/{MAIN_ADMIN_USERNAME}")],
                 [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
             ])
             await call.message.edit_text(pro_info_txt, reply_markup=pro_kb)
-
-        elif call.data in ["buy_pro_1m", "buy_pro_2m"]:
-            is_2m = call.data == "buy_pro_2m"
-            title = "اشتراك Pro - شهرين" if is_2m else "اشتراك Pro - شهر واحد"
-            desc = "ترقية حسابك لباقة Pro المميزة لمدة 60 يوم" if is_2m else "ترقية حسابك لباقة Pro المميزة لمدة 30 يوم"
-            stars = 150 if is_2m else 50
-            payload = "pro_2_months" if is_2m else "pro_1_month"
-
-            try:
-                await client.send_invoice(
-                    chat_id=call.message.chat.id,
-                    title=title,
-                    description=desc,
-                    payload=payload,
-                    currency="XTR",
-                    prices=[LabeledPrice(label=title, amount=stars)],
-                    provider_token=""
-                )
-                await call.answer("💳 تم إرسال فاتورة الدفع بالنجوم بنجاح!", show_alert=False)
-            except Exception as e:
-                await call.answer(f"❌ حدث خطأ أثناء إنشاء الفاتورة: {e}", show_alert=True)
 
         elif call.data == "show_dashboard":
             st = await db_exec("SELECT * FROM stats WHERE user_id = ?", (user_id,), fetchone=True)
@@ -773,7 +746,7 @@ def setup_handlers(bot_app):
             await db_exec("UPDATE users SET state = 'waiting_for_code' WHERE user_id = ?", (user_id,))
             await call.message.edit_text("🎟️ **أرسل كود Pro الذي حصلت عليه الآن:**", reply_markup=back_menu())
 
-        # ==================== لوحة الأدمن والتحكم الكاملة ====================
+        # ==================== لوحة الأدمن والتحكم ====================
         elif call.data == "admin_panel":
             if not admin_flag: return
             admin_kb = InlineKeyboardMarkup([
@@ -784,7 +757,7 @@ def setup_handlers(bot_app):
             ])
             await call.message.edit_text("👑 **لوحة تحكم الأدمن الشاملة:**", reply_markup=admin_kb)
 
-        # ---------------- 1. إدارة المطورين ----------------
+        # ---------------- إدارة المطورين ----------------
         elif call.data == "admin_devs_panel":
             if not admin_flag or not await has_permission(call.from_user, "dev_manage"):
                 await call.answer("❌ ليس لديك صلاحية إدارة المطورين.", show_alert=True)
@@ -825,7 +798,7 @@ def setup_handlers(bot_app):
             await db_exec("UPDATE users SET state = 'admin_waiting_rem_dev' WHERE user_id = ?", (user_id,))
             await call.message.edit_text("❌ **حذف مطور:**\n\nأرسل آيدي المطور المراد حذفه الآن:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_devs_panel")]]))
 
-        # ---------------- 2. تعديل البوت ----------------
+        # ---------------- تعديل البوت ----------------
         elif call.data == "admin_edit_bot":
             if not admin_flag or not await has_permission(call.from_user, "edit_bot"):
                 await call.answer("❌ ليس لديك صلاحية تعديل البوت.", show_alert=True)
@@ -847,6 +820,7 @@ def setup_handlers(bot_app):
             )
 
         elif call.data.startswith("edit_btn_"):
+            if not admin_flag: return
             btn_type = call.data.replace("edit_btn_", "")
             await db_exec("UPDATE users SET state = ? WHERE user_id = ?", (f"admin_edit_btn_{btn_type}", user_id))
             await call.message.edit_text("🔘 **أرسل الاسم الجديد للزر الآن:**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_edit_bot")]]))
@@ -911,45 +885,12 @@ def setup_handlers(bot_app):
             await call.message.edit_text("📢 **اختر الفئة الموجه لها الإذاعة:**", reply_markup=b_kb)
 
         elif call.data.startswith("bc_"):
+            if not admin_flag: return
             target_type = call.data.split("_")[1]
             await db_exec("UPDATE users SET state = ? WHERE user_id = ?", (f"admin_bc_{target_type}", user_id))
             await call.message.edit_text(f"📢 أرسل الرسالة الآن للإذاعة لفئة (`{target_type}`):", reply_markup=back_menu())
 
-    # ==================== معالجة التأكيد التلقائي والشراء بالنجوم ====================
-    @bot_app.on_pre_checkout_query()
-    async def process_pre_checkout(client, query: PreCheckoutQuery):
-        await query.answer(ok=True)
-
-    @bot_app.on_message(filters.successful_payment)
-    async def process_successful_payment(client, message: Message):
-        payment = message.successful_payment
-        user_id = str(message.from_user.id)
-        payload = payment.invoice_payload
-
-        days = 60 if payload == "pro_2_months" else 30
-        exp = time.time() + (days * 86400)
-
-        user = await db_exec("SELECT pro_expires_at FROM users WHERE user_id = ?", (user_id,), fetchone=True)
-        if user and user["pro_expires_at"] > time.time():
-            exp = user["pro_expires_at"] + (days * 86400)
-
-        await db_exec("UPDATE users SET is_pro = 1, pro_expires_at = ? WHERE user_id = ?", (exp, user_id))
-        
-        await message.reply_text(f"🎉 **تم تأكيد الدفع بنجاح!**\nتم تفعيل اشتراك Pro لمدة `{days}` يوماً في حسابك فوراً.")
-
-        # إرسال إشعار للمالك MAIN_ADMIN_USERNAME (@socfr)
-        try:
-            admin_msg = (
-                f"💰 **تم استلام عملية دفع بالنجوم جديدة!**\n\n"
-                f"👤 المستخدم: {message.from_user.mention} (`{user_id}`)\n"
-                f"⭐️ المبلغ: `{payment.total_amount}` نجمة\n"
-                f"🗓️ المدة: `{days}` يوماً"
-            )
-            await client.send_message(MAIN_ADMIN_USERNAME, admin_msg)
-        except Exception as e:
-            logging.error(f"فشل إرسال إشعار الدفع للأدمن: {e}")
-
-    # ==================== معالجة الرسائل العادية وإدخالات النصوص ====================
+    # ==================== معالجة الرسائل العادية والمدخلات ====================
     @bot_app.on_message(~filters.command("start"))
     async def msg_handler(client, message: Message):
         if not message.from_user: return
@@ -1186,7 +1127,6 @@ def setup_handlers(bot_app):
             except Exception:
                 await message.reply_text("❌ أرسل رقماً صحيحاً فقط بالثواني!")
 
-        # إكمال استلام نوع الرسالة (ميديا أو نص)
         elif state == "waiting_for_text":
             btn_text, btn_url = None, None
             content = message.text or message.caption or ""
@@ -1233,7 +1173,7 @@ def setup_handlers(bot_app):
             await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
             await message.reply_text("✅ **تم حفظ الرسالة بنجاح!**", reply_markup=back_menu())
 
-# --- التشغيل الرئيسي للنظام ---
+# --- التشغيل الرئيسي النظام ---
 async def main():
     global app
     init_db()
