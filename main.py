@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 import random
 import time
@@ -6,6 +7,7 @@ import logging
 import sqlite3
 import base64
 import hashlib
+from datetime import datetime
 from aiohttp import web
 from cryptography.fernet import Fernet
 from pyrogram import Client, filters, idle
@@ -14,7 +16,7 @@ from pyrogram.errors import (
     SessionPasswordNeeded, UserNotParticipant, FloodWait, 
     AuthKeyUnregistered, UserBannedInChannel, BotMethodInvalid
 )
-from pyrogram.enums import ChatMemberStatus, ChatType
+from pyrogram.enums import ChatMemberStatus, ChatType, ChatAction
 
 # --- إعداد التسجيل والأخطاء ---
 logging.basicConfig(
@@ -28,13 +30,20 @@ API_ID = int(os.getenv("API_ID", 33057479))
 API_HASH = os.getenv("API_HASH", "0adc25ac386d50e8ee9f3b987863c4c0")
 MAIN_ADMIN_USERNAME = "scofr"
 REQUIRED_CHANNEL = "@m_55wa"
-BACKUP_CHAT_ID = "@m_55wa"
 DB_FILE = "bot_database.db"
 
-# متغير البوت الرئيسي
 app = None
 
-# --- خادم HTTP لإبقاء البوت متصلاً (Render Health Check) ---
+# --- معالج Spintax لتوليد نصوص عشوائية لـ Pro ---
+def parse_spintax(text):
+    if not text:
+        return text
+    pattern = r"\{([^{}]+)\}"
+    while re.search(pattern, text):
+        text = re.sub(pattern, lambda m: random.choice(m.group(1).split("|")), text)
+    return text
+
+# --- خادم HTTP لإبقاء البوت متصلاً على Render ---
 async def handle_ping(request):
     return web.Response(text="Bot is running smoothly!", status=200)
 
@@ -47,9 +56,9 @@ async def start_http_server():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logging.info(f"🌐 تم تشغيل خادم HTTP بنجاح على المنفذ {port}")
+    logging.info(f"🌐 تم تشغيل خادم HTTP على المنفذ {port}")
 
-# --- مفتاح تشفير الجلسات ---
+# --- تشفير وحفظ الجلسات ---
 def get_fernet():
     secret = BOT_TOKEN
     key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
@@ -74,6 +83,8 @@ def init_db():
     
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
+        username TEXT,
+        first_name TEXT,
         is_pro INTEGER DEFAULT 0,
         pro_expires_at REAL DEFAULT 0,
         banned INTEGER DEFAULT 0,
@@ -165,13 +176,13 @@ async def db_exec(query, params=(), fetchone=False, fetchall=False, commit=True)
         return res
     return await asyncio.to_thread(_run)
 
-# --- إدارة الجلسات ---
+# --- إدارة الجلسات ومجموعات النشر ---
 client_pool = {}
 login_attempts = {}
 user_publisher_tasks = {}
 rate_limits = {}
 
-def check_rate_limit(user_id, limit_seconds=1.0):
+def check_rate_limit(user_id, limit_seconds=0.8):
     now = time.time()
     last = rate_limits.get(user_id, 0)
     if now - last < limit_seconds:
@@ -224,7 +235,7 @@ def normalize_group_id(g):
         return g_str
     return "@" + g_str
 
-# --- الواجهات ---
+# --- قوائم التحكم واختصارات اللوحة ---
 def main_menu(is_admin_user=False, is_pro=False):
     pro_badge = " ⭐ [Pro]" if is_pro else " 👤 [مجاني]"
     keyboard = [
@@ -237,13 +248,13 @@ def main_menu(is_admin_user=False, is_pro=False):
         [InlineKeyboardButton("👑 ترقية لـ Pro / الدعم", url=f"https://t.me/{MAIN_ADMIN_USERNAME}")]
     ]
     if is_admin_user:
-        keyboard.insert(0, [InlineKeyboardButton("🛠️ لوحة الأدمن الخاصة", callback_data="admin_panel")])
+        keyboard.insert(0, [InlineKeyboardButton("🛠️ لوحة تحكم الأدمن", callback_data="admin_panel")])
     return InlineKeyboardMarkup(keyboard)
 
 def back_menu():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]])
 
-# --- محرك النشر ---
+# --- محرك النشر التلقائي ---
 async def get_or_create_client(user_id, acc):
     acc_id = acc["id"]
     pool_key = f"{user_id}_{acc_id}"
@@ -266,18 +277,18 @@ async def get_or_create_client(user_id, acc):
         client_pool[pool_key] = client
         return client
     except Exception as e:
-        logging.error(f"فشل الاتصال بالحساب {acc_id} للمستخدم {user_id}: {e}")
+        logging.error(f"فشل الاتصال بالحساب {acc_id}: {e}")
         return None
 
 async def user_publisher_worker(user_id):
-    logging.info(f"بدء مهمة النشر للمستخدم: {user_id}")
+    logging.info(f"بدء النشر للمستخدم: {user_id}")
     while True:
         try:
             user = await db_exec("SELECT * FROM users WHERE user_id = ?", (user_id,), fetchone=True)
             if not user or not user["active"] or user["banned"]:
                 break
 
-            is_pro = user["is_pro"]
+            is_pro = bool(user["is_pro"])
             if is_pro and user["pro_expires_at"] > 0 and time.time() > user["pro_expires_at"]:
                 await db_exec("UPDATE users SET is_pro = 0, pro_expires_at = 0 WHERE user_id = ?", (user_id,))
                 is_pro = False
@@ -304,16 +315,29 @@ async def user_publisher_worker(user_id):
                     if not client: continue
 
                     try:
+                        # تطبيق Spintax فقط لمستخدمي Pro لتنويع النصوص وتفادي الحظر
+                        raw_content = msg_item["content"] or ""
+                        raw_caption = msg_item["caption"] or raw_content
+                        
+                        content = parse_spintax(raw_content) if is_pro else raw_content
+                        caption = parse_spintax(raw_caption) if is_pro else raw_caption
+
                         markup = None
                         if msg_item["btn_text"] and msg_item["btn_url"]:
                             markup = InlineKeyboardMarkup([[InlineKeyboardButton(msg_item["btn_text"], url=msg_item["btn_url"])]])
 
                         m_type = msg_item["type"]
                         file_id = msg_item["file_id"]
-                        caption = msg_item["caption"] or msg_item["content"]
+
+                        # محاكاة الكتابة البشرية لمستخدمي Pro
+                        if is_pro:
+                            try:
+                                await client.send_chat_action(target_chat, ChatAction.TYPING)
+                                await asyncio.sleep(1.5)
+                            except Exception: pass
 
                         if m_type == "text":
-                            await client.send_message(target_chat, msg_item["content"], reply_markup=markup)
+                            await client.send_message(target_chat, content, reply_markup=markup)
                         elif m_type == "photo":
                             try: await client.send_photo(target_chat, file_id, caption=caption, reply_markup=markup)
                             except Exception: await client.send_message(target_chat, caption, reply_markup=markup)
@@ -333,7 +357,7 @@ async def user_publisher_worker(user_id):
 
                         await db_exec("UPDATE stats SET success = success + 1, last_publish = ? WHERE user_id = ?", (time.time(), user_id))
                         await db_exec("INSERT INTO publish_logs (user_id, chat_id, status, timestamp, details) VALUES (?, ?, ?, ?, ?)",
-                                      (user_id, str(target_chat), "نجاح", time.time(), f"تم الإرسال عبر {acc['first_name']}"))
+                                      (user_id, str(target_chat), "نجاح", time.time(), f"عبر {acc['first_name']}"))
                         break
 
                     except FloodWait as fw:
@@ -346,7 +370,7 @@ async def user_publisher_worker(user_id):
                         await db_exec("INSERT INTO publish_logs (user_id, chat_id, status, timestamp, details) VALUES (?, ?, ?, ?, ?)",
                                       (user_id, str(target_chat), "فشل", time.time(), err_msg))
 
-                await asyncio.sleep(3)
+                await asyncio.sleep(2)
 
             delay = user["delay"] if user["delay"] >= 10 else 10
             actual_delay = delay + random.randint(0, 15) if is_pro else delay
@@ -377,12 +401,14 @@ async def manage_publisher_tasks():
             logging.error(f"خطأ مدير مهام النشر: {e}")
         await asyncio.sleep(5)
 
-# --- انشاء البوت الرئيسي والـ Handlers ---
+# --- معالجة الأوامر والأحداث ---
 def setup_handlers(bot_app):
     @bot_app.on_message(filters.command("start"))
     async def start_cmd(client, message):
         if not message.from_user: return
         user_id = str(message.from_user.id)
+        uname = message.from_user.username or ""
+        fname = message.from_user.first_name or ""
 
         if not await is_subscribed(client, message.from_user.id):
             await message.reply_text(
@@ -396,9 +422,12 @@ def setup_handlers(bot_app):
 
         user = await db_exec("SELECT * FROM users WHERE user_id = ?", (user_id,), fetchone=True)
         if not user:
-            await db_exec("INSERT INTO users (user_id, created_at) VALUES (?, ?)", (user_id, time.time()))
+            await db_exec("INSERT INTO users (user_id, username, first_name, created_at) VALUES (?, ?, ?, ?)", 
+                          (user_id, uname, fname, time.time()))
             await db_exec("INSERT INTO stats (user_id) VALUES (?)", (user_id,))
             user = await db_exec("SELECT * FROM users WHERE user_id = ?", (user_id,), fetchone=True)
+        else:
+            await db_exec("UPDATE users SET username = ?, first_name = ? WHERE user_id = ?", (uname, fname, user_id))
 
         if user["banned"] and not await is_admin(message.from_user):
             await message.reply_text("❌ أنت محظور من استخدام هذا البوت.")
@@ -408,7 +437,7 @@ def setup_handlers(bot_app):
         admin_flag = await is_admin(message.from_user)
         is_pro = bool(user["is_pro"])
 
-        txt = f"أهلاً بك **{message.from_user.first_name}** في بوت النشر التلقائي المطور!\n\n"
+        txt = f"أهلاً بك **{fname}** في بوت النشر التلقائي المطور!\n\n"
         txt += "⭐ **نوع الاشتراك:** `Pro`" if is_pro else "👤 **نوع الاشتراك:** `مجاني`"
         await message.reply_text(txt, reply_markup=main_menu(admin_flag, is_pro))
 
@@ -418,7 +447,7 @@ def setup_handlers(bot_app):
         user_id = str(call.from_user.id)
         
         if not check_rate_limit(user_id):
-            await call.answer("⏱️ يرجى الانتظار قليلاً...", show_alert=False)
+            await call.answer("⏱️ يرجى الانتظار...", show_alert=False)
             return
 
         admin_flag = await is_admin(call.from_user)
@@ -448,9 +477,12 @@ def setup_handlers(bot_app):
                 "📖 **دليل استخدام البوت المطور:**\n\n"
                 "1️⃣ اضغط على **إضافة حساب** لربط حسابك عبر الرقم والرمز.\n"
                 "2️⃣ قم بإضافة **المجموعات** أو استخدام زر **جلب مجموعاتي**.\n"
-                "3️⃣ قم بإضافة **الرسائل** (يدعم النصوص، الصور، المستندات، الأصوات، البصمات، الملصقات).\n"
+                "3️⃣ قم بإضافة **الرسائل** (نصوص، صور، فيديو، مستندات، بصمات).\n"
                 "4️⃣ اضغط **بدء النشر** للبدء التلقائي.\n\n"
-                "⭐ **مميزات Pro:** نشر بعدة حسابات متوازية، وقت عشوائي، ميديا بدون حدود، وإرسال عشوائي."
+                "⭐ **مميزات Pro الجبارة:**\n"
+                "• دعم ميزة Spintax لحماية الحسابات مثل: `{أهلاً|مرحباً}`.\n"
+                "• محاكاة كتابة سريعة للإيحاء بالنشر البشري وتفادي الحظر.\n"
+                "• النشر بعدة حسابات بالتوازي وتنويع الرسائل المضيئة."
             )
             await call.message.edit_text(guide, reply_markup=back_menu())
 
@@ -619,7 +651,10 @@ def setup_handlers(bot_app):
                 await call.answer("❌ الحد الأقصى للمجاني 3 رسائل فقط.", show_alert=True)
                 return
             await db_exec("UPDATE users SET state = 'waiting_for_text' WHERE user_id = ?", (user_id,))
-            await call.message.edit_text("✍️ **أرسل رسالتك الآن** (نص، صورة، فيديو، بصمة، مستند...)\nمع إمكانية إضافة زر شفاف بكتابة:\n`النص | اسم الزر - https://t.me/...`", reply_markup=back_menu())
+            await call.message.edit_text("✍️ **أرسل رسالتك الآن** (نص، صورة، فيديو، بصمة، مستند...)\n\n"
+                                        "💡 **ميزة Pro Spintax:** يمكنك التنويم بين الكلمات لمنع الحظر مثل:\n"
+                                        "`{أهلاً|مرحباً|يا هلا} بكم في {متجرنا|قناتنا}`\n\n"
+                                        "إضافة زر شفاف: `النص | اسم الزر - الرابط`", reply_markup=back_menu())
 
         elif call.data == "set_time":
             await db_exec("UPDATE users SET state = 'waiting_for_time' WHERE user_id = ?", (user_id,))
@@ -645,14 +680,56 @@ def setup_handlers(bot_app):
             await db_exec("UPDATE users SET state = 'waiting_for_code' WHERE user_id = ?", (user_id,))
             await call.message.edit_text("🎟️ **أرسل كود Pro الذي حصلت عليه الآن:**", reply_markup=back_menu())
 
+        # ==================== لوحة الأدمن الكاملة ====================
         elif call.data == "admin_panel":
             if not admin_flag: return
             admin_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🎟️ إنشاء كود Pro", callback_data="admin_gen_code"), InlineKeyboardButton("⭐ إدارة Pro المباشرة", callback_data="admin_manage_pro")],
                 [InlineKeyboardButton("📊 إحصائيات عامة", callback_data="admin_stats"), InlineKeyboardButton("📢 إذاعة موجهة", callback_data="admin_broadcast")],
-                [InlineKeyboardButton("🎟️ إنشاء كود Pro", callback_data="admin_gen_code"), InlineKeyboardButton("📁 تصدير DB", callback_data="admin_export_db")],
-                [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
+                [InlineKeyboardButton("📁 تصدير DB", callback_data="admin_export_db"), InlineKeyboardButton("🔙 الصفحة الرئيسية", callback_data="back_main")]
             ])
             await call.message.edit_text("👑 **لوحة تحكم الأدمن الشاملة:**", reply_markup=admin_kb)
+
+        # 1. إنشاء كود Pro
+        elif call.data == "admin_gen_code":
+            if not admin_flag: return
+            await db_exec("UPDATE users SET state = 'admin_creating_code' WHERE user_id = ?", (user_id,))
+            await call.message.edit_text("🎟️ **إنشاء كود Pro جديد:**\n\nأرسل بيانات الكود بالصيغة التالية:\n`الكود الأيام الاستخدامات`\n\nمثال:\n`VIP2026 30 5`", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_panel")]]))
+
+        # 2. إدارة Pro المباشرة
+        elif call.data == "admin_manage_pro":
+            if not admin_flag: return
+            pro_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📋 المشتركين في Pro", callback_data="admin_list_pro")],
+                [InlineKeyboardButton("➕ تفعيل Pro لمستخدم", callback_data="admin_add_pro_manual"), InlineKeyboardButton("❌ إلغاء Pro لمستخدم", callback_data="admin_rem_pro_manual")],
+                [InlineKeyboardButton("🔙 رجوع للأدمن", callback_data="admin_panel")]
+            ])
+            await call.message.edit_text("⭐ **إدارة اشتراكات Pro المباشرة:**", reply_markup=pro_kb)
+
+        elif call.data == "admin_list_pro":
+            if not admin_flag: return
+            pro_users = await db_exec("SELECT * FROM users WHERE is_pro = 1", fetchall=True)
+            txt = f"⭐ **قائمة مشتركي Pro الحاليين (`{len(pro_users)}`):**\n\n"
+            for u in pro_users:
+                u_id = u["user_id"]
+                u_name = f"@{u['username']}" if u["username"] else u["first_name"] or "بدون اسم"
+                exp = "دائم"
+                if u["pro_expires_at"] > 0:
+                    exp = datetime.fromtimestamp(u["pro_expires_at"]).strftime('%Y-%m-%d')
+                txt += f"• `{u_id}` | {u_name} | ينتهي: `{exp}`\n"
+            if not pro_users:
+                txt += "لا يوجد مشتركين حالياً."
+            await call.message.edit_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_manage_pro")]]))
+
+        elif call.data == "admin_add_pro_manual":
+            if not admin_flag: return
+            await db_exec("UPDATE users SET state = 'admin_waiting_add_pro' WHERE user_id = ?", (user_id,))
+            await call.message.edit_text("➕ **تفعيل Pro يدوياً:**\n\nأرسل الآيدي (أو المعرف) ومثلاً عدد الأيام بالصيغة التالية:\n`الآيدي الأيام`\n\nمثال:\n`123456789 30`", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_manage_pro")]]))
+
+        elif call.data == "admin_rem_pro_manual":
+            if not admin_flag: return
+            await db_exec("UPDATE users SET state = 'admin_waiting_rem_pro' WHERE user_id = ?", (user_id,))
+            await call.message.edit_text("❌ **إلغاء Pro لمستخدم:**\n\nأرسل آيدي المستخدم (ID) لإلغاء تفعيل Pro عنه فوراً:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_manage_pro")]]))
 
         elif call.data == "admin_stats":
             if not admin_flag: return
@@ -664,11 +741,6 @@ def setup_handlers(bot_app):
         elif call.data == "admin_export_db":
             if not admin_flag: return
             await call.message.reply_document(DB_FILE, caption="📁 **نسخة احتياطية لقاعدة البيانات**")
-
-        elif call.data == "admin_gen_code":
-            if not admin_flag: return
-            await db_exec("UPDATE users SET state = 'admin_creating_code' WHERE user_id = ?", (user_id,))
-            await call.message.edit_text("🎟️ أرسل بيانات الكود بالصيغة التالية:\n`VIPCODE 30 5`\n(الكود الأيام الاستخدامات)", reply_markup=back_menu())
 
         elif call.data == "admin_broadcast":
             if not admin_flag: return
@@ -694,6 +766,7 @@ def setup_handlers(bot_app):
 
         admin_flag = await is_admin(message.from_user)
 
+        # ادخال الكود من المستخدم
         if state == "waiting_for_code":
             code_input = message.text.strip()
             cd = await db_exec("SELECT * FROM codes WHERE code = ?", (code_input,), fetchone=True)
@@ -714,6 +787,7 @@ def setup_handlers(bot_app):
             else:
                 await message.reply_text("❌ الكود خاطئ أو غير موجود.")
 
+        # أدمن: إنشاء كود Pro
         elif state == "admin_creating_code":
             if not admin_flag: return
             try:
@@ -721,9 +795,48 @@ def setup_handlers(bot_app):
                 code, days, max_u = p[0], int(p[1]), int(p[2])
                 await db_exec("INSERT INTO codes (code, days, max_uses) VALUES (?, ?, ?)", (code, days, max_u))
                 await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
-                await message.reply_text(f"✅ تم إنشاء الكود `{code}` بنجاح!", reply_markup=back_menu())
+                await message.reply_text(f"✅ تم إنشاء الكود `{code}` بنجاح لمُدة `{days}` يوماً لعدد `{max_u}` مستخدمين!", 
+                                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 للوحة الأدمن", callback_data="admin_panel")]]))
             except Exception:
-                await message.reply_text("❌ صيغة خاطئة. أرسل مثل: `PRO2026 30 10`")
+                await message.reply_text("❌ صيغة خاطئة. يرجى إرسالها كالتالي:\n`VIP2026 30 5`")
+
+        # أدمن: تفعيل Pro يدوياً
+        elif state == "admin_waiting_add_pro":
+            if not admin_flag: return
+            try:
+                p = message.text.split()
+                target_uid, days = p[0].replace("@", ""), int(p[1])
+                
+                # البحث بالمعرف أو الآيدي
+                target_user = await db_exec("SELECT user_id FROM users WHERE user_id = ? OR username = ?", (target_uid, target_uid), fetchone=True)
+                if not target_user:
+                    await message.reply_text("❌ لم يتم العثور على هذا المستخدم في قاعدة بيانات البوت.")
+                    return
+
+                actual_id = target_user["user_id"]
+                exp = time.time() + (days * 86400)
+                await db_exec("UPDATE users SET is_pro = 1, pro_expires_at = ? WHERE user_id = ?", (exp, actual_id))
+                await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
+                
+                await message.reply_text(f"✅ تم تفعيل رتبة Pro للمستخدم `{actual_id}` لمدة {days} يوم!", 
+                                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إدارة Pro", callback_data="admin_manage_pro")]]))
+            except Exception:
+                await message.reply_text("❌ صيغة خاطئة. ارسل: `آيدي/يوزر الأيام` (مثال: `123456789 30`)")
+
+        # أدمن: إلغاء Pro يدوياً
+        elif state == "admin_waiting_rem_pro":
+            if not admin_flag: return
+            target_uid = message.text.strip().replace("@", "")
+            target_user = await db_exec("SELECT user_id FROM users WHERE user_id = ? OR username = ?", (target_uid, target_uid), fetchone=True)
+            if not target_user:
+                await message.reply_text("❌ لم يتم العثور على المستخدم.")
+                return
+
+            actual_id = target_user["user_id"]
+            await db_exec("UPDATE users SET is_pro = 0, pro_expires_at = 0 WHERE user_id = ?", (actual_id,))
+            await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
+            await message.reply_text(f"✅ تم سحب رتبة Pro من المستخدم `{actual_id}` بنجاح.", 
+                                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إدارة Pro", callback_data="admin_manage_pro")]]))
 
         elif state.startswith("admin_bc_"):
             if not admin_flag: return
@@ -889,12 +1002,11 @@ def setup_handlers(bot_app):
             except Exception:
                 await message.reply_text("❌ يرجى إرسال رقم صحيح بالثواني.")
 
-# --- التشغيل داخل الـ Event Loop النظيف ---
+# --- التشغيل الرئيسي النظيف ---
 async def main():
     global app
     init_db()
     
-    # إنشاء البوت داخل دالة main يضمن عدم حدوث تعارض في الـ Event Loop
     app = Client("publisher_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
     setup_handlers(app)
     
@@ -903,7 +1015,7 @@ async def main():
     asyncio.create_task(manage_publisher_tasks())
     
     await app.start()
-    logging.info("🚀 تم تشغيل البوت وخادم الـ HTTP المحدث بنجاح دون أي تعارض!")
+    logging.info("🚀 تم تشغيل البوت المحدث بنجاح!")
     await idle()
     await app.stop()
 
