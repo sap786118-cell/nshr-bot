@@ -6,6 +6,7 @@ import logging
 import sqlite3
 import base64
 import hashlib
+from aiohttp import web
 from cryptography.fernet import Fernet
 from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
@@ -21,39 +22,29 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# --- سيرفر HTTP مدمج يعمل داخل نفس asyncio loop الخاص بالبوت ---
-async def handle_health_check(reader, writer):
-    try:
-        await reader.read(100)
-        response = (
-            "HTTP/1.1 200 OK\r\n"
-            "Content-Type: text/plain; charset=utf-8\r\n"
-            "Content-Length: 20\r\n"
-            "Connection: close\r\n\r\n"
-            "Bot is running fine!"
-        )
-        writer.write(response.encode('utf-8'))
-        await writer.drain()
-    except Exception:
-        pass
-    finally:
-        writer.close()
-        await writer.wait_closed()
-
-async def start_health_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = await asyncio.start_server(handle_health_check, '0.0.0.0', port)
-    logging.info(f"🌐 تم تشغيل خادم الويب المدمج لـ Render على المنفذ: {port}")
-    return server
-
-# --- ثوابت البوت ---
-BOT_TOKEN = "8996776697:AAFquiMkylAqhbf_G5FbGYXSVnVa9LZ4k3A"
-API_ID = 33057479
-API_HASH = "0adc25ac386d50e8ee9f3b987863c4c0"
+# --- ثوابت البوت (يدعم البيئة والمحدد يدويًا) ---
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8996776697:AAFquiMkylAqhbf_G5FbGYXSVnVa9LZ4k3A")
+API_ID = int(os.getenv("API_ID", 33057479))
+API_HASH = os.getenv("API_HASH", "0adc25ac386d50e8ee9f3b987863c4c0")
 MAIN_ADMIN_USERNAME = "scofr"
 REQUIRED_CHANNEL = "@m_55wa"
 BACKUP_CHAT_ID = "@m_55wa"
 DB_FILE = "bot_database.db"
+
+# --- خادم HTTP لإبقاء البوت متصلاً (Keep-Alive / Health Check) ---
+async def handle_ping(request):
+    return web.Response(text="Bot is running smoothly!", status=200)
+
+async def start_http_server():
+    port = int(os.environ.get("PORT", 8080))
+    app_web = web.Application()
+    app_web.router.add_get("/", handle_ping)
+    app_web.router.add_get("/health", handle_ping)
+    runner = web.AppRunner(app_web)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info(f"🌐 تم تشغيل خادم HTTP بنجاح على المنفذ {port}")
 
 # --- مفتاح تشفير الجلسات ---
 def get_fernet():
@@ -71,10 +62,14 @@ def decrypt_session(val):
     try: return get_fernet().decrypt(val.encode()).decode()
     except Exception: return val
 
-# --- إدارة قاعدة البيانات (SQLite) ---
+# --- إدارة قاعدة البيانات (SQLite محسنة للسرعة) ---
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+    
+    # تحسين سرعة الأداء والاستجابة
+    c.execute("PRAGMA journal_mode=WAL;")
+    c.execute("PRAGMA synchronous=NORMAL;")
     
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
@@ -169,13 +164,13 @@ async def db_exec(query, params=(), fetchone=False, fetchall=False, commit=True)
         return res
     return await asyncio.to_thread(_run)
 
-# --- متغيرات النظام والجلسات ---
+# --- إدارة الجلسات والنسخ الاحتياطي الآمن ---
 client_pool = {}
 login_attempts = {}
 user_publisher_tasks = {}
 rate_limits = {}
 
-def check_rate_limit(user_id, limit_seconds=1.5):
+def check_rate_limit(user_id, limit_seconds=1.0):
     now = time.time()
     last = rate_limits.get(user_id, 0)
     if now - last < limit_seconds:
@@ -205,7 +200,7 @@ async def close_and_remove_client(pool_key):
             except Exception: pass
         del client_pool[pool_key]
 
-# --- تطبيق البوت الرئيسي ---
+# --- البوت الرئيسي ---
 app = Client("publisher_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
 
 async def is_admin(user):
@@ -231,7 +226,7 @@ def normalize_group_id(g):
         return g_str
     return "@" + g_str
 
-# --- القوائم والواجهات ---
+# --- الواجهات ولوحات التحكم ---
 def main_menu(is_admin_user=False, is_pro=False):
     pro_badge = " ⭐ [Pro]" if is_pro else " 👤 [مجاني]"
     keyboard = [
@@ -250,7 +245,7 @@ def main_menu(is_admin_user=False, is_pro=False):
 def back_menu():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]])
 
-# --- محرك النشر التلقائي ---
+# --- محرك النشر المستقل ---
 async def get_or_create_client(user_id, acc):
     acc_id = acc["id"]
     pool_key = f"{user_id}_{acc_id}"
@@ -344,6 +339,7 @@ async def user_publisher_worker(user_id):
                         break
 
                     except FloodWait as fw:
+                        logging.warning(f"FloodWait {fw.value}s للمستخدم {user_id}")
                         await asyncio.sleep(fw.value)
                         continue
                     except Exception as e:
@@ -384,7 +380,7 @@ async def manage_publisher_tasks():
             logging.error(f"خطأ مدير مهام النشر: {e}")
         await asyncio.sleep(5)
 
-# --- الأحداث والـ Handlers ---
+# --- معالجات الرسائل والأوامر ---
 @app.on_message(filters.command("start"))
 async def start_cmd(client, message):
     if not message.from_user: return
@@ -393,7 +389,10 @@ async def start_cmd(client, message):
     if not await is_subscribed(client, message.from_user.id):
         await message.reply_text(
             f"❌ **يجب عليك الاشتراك في قناة البوت أولاً لاستخدامه:**\n{REQUIRED_CHANNEL}",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📢 اشترك الآن", url=f"https://t.me/{REQUIRED_CHANNEL.replace('@','')}")], [InlineKeyboardButton("✅ تحقق", callback_data="check_sub")]])
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📢 اشترك الآن", url=f"https://t.me/{REQUIRED_CHANNEL.replace('@','')}")],
+                [InlineKeyboardButton("✅ تحقق", callback_data="check_sub")]
+            ])
         )
         return
 
@@ -419,6 +418,8 @@ async def start_cmd(client, message):
 async def cb_handler(client, call: CallbackQuery):
     if not call.from_user: return
     user_id = str(call.from_user.id)
+    
+    # الإجابة السريعة لتسريع التفاعل
     if not check_rate_limit(user_id):
         await call.answer("⏱️ يرجى الانتظار قليلاً...", show_alert=False)
         return
@@ -450,8 +451,9 @@ async def cb_handler(client, call: CallbackQuery):
             "📖 **دليل استخدام البوت المطور:**\n\n"
             "1️⃣ اضغط على **إضافة حساب** لربط حسابك عبر الرقم والرمز.\n"
             "2️⃣ قم بإضافة **المجموعات** أو استخدام زر **جلب مجموعاتي**.\n"
-            "3️⃣ قم بإضافة **الرسائل** (نص، صورة، فيديو، بصمة...).\n"
-            "4️⃣ اضغط **بدء النشر** للبدء التلقائي."
+            "3️⃣ قم بإضافة **الرسائل** (يدعم النصوص، الصور، المستندات، الأصوات، البصمات، الملصقات).\n"
+            "4️⃣ اضغط **بدء النشر** للبدء التلقائي.\n\n"
+            "⭐ **مميزات Pro:** نشر بعدة حسابات متوازية، وقت عشوائي، ميديا بدون حدود، وإرسال عشوائي."
         )
         await call.message.edit_text(guide, reply_markup=back_menu())
 
@@ -503,13 +505,13 @@ async def cb_handler(client, call: CallbackQuery):
         for a in accs:
             await close_and_remove_client(f"{user_id}_{a['id']}")
         await db_exec("DELETE FROM accounts WHERE user_id = ?", (user_id,))
-        await call.answer("🗑️ تم حذف جميع الحسابات.", show_alert=True)
+        await call.answer("🗑️ تم حذف جميع الحسابات وإغلاق جلساتها.", show_alert=True)
         await call.message.edit_text("تم مسح الحسابات.", reply_markup=back_menu())
 
     elif call.data == "add_account":
         acc_count = (await db_exec("SELECT COUNT(*) as c FROM accounts WHERE user_id = ?", (user_id,), fetchone=True))["c"]
         if not is_pro and acc_count >= 1:
-            await call.answer("❌ الباقة المجانية تسمح بحساب واحد فقط!", show_alert=True)
+            await call.answer("❌ الباقة المجانية تسمح بحساب واحد فقط! اشترك في Pro للزيادة.", show_alert=True)
             return
         await db_exec("UPDATE users SET state = 'waiting_for_phone' WHERE user_id = ?", (user_id,))
         await call.message.edit_text("📱 **أرسل رقم هاتفك الآن مع رمز الدولة**\nمثال: `+966500000000`", reply_markup=back_menu())
@@ -573,10 +575,10 @@ async def cb_handler(client, call: CallbackQuery):
         if not accs:
             await call.answer("❌ أضف حساباً أولاً للجلب منه!", show_alert=True)
             return
-        await call.answer("⏳ جاري فحص وجلب المجموعات...", show_alert=True)
+        await call.answer("⏳ جاري فحص وجلب المجموعات من حسابك...", show_alert=True)
         client = await get_or_create_client(user_id, accs[0])
         if not client:
-            await call.message.edit_text("❌ فشل الاتصال بالحساب.", reply_markup=back_menu())
+            await call.message.edit_text("❌ فشل الاتصال بالحساب لجلب المجموعات.", reply_markup=back_menu())
             return
         added = 0
         async for dialog in client.get_dialogs(limit=100):
@@ -620,7 +622,7 @@ async def cb_handler(client, call: CallbackQuery):
             await call.answer("❌ الحد الأقصى للمجاني 3 رسائل فقط.", show_alert=True)
             return
         await db_exec("UPDATE users SET state = 'waiting_for_text' WHERE user_id = ?", (user_id,))
-        await call.message.edit_text("✍️ **أرسل رسالتك الآن** (نص، صورة، فيديو، بصمة...)", reply_markup=back_menu())
+        await call.message.edit_text("✍️ **أرسل رسالتك الآن** (نص، صورة، فيديو، بصمة، مستند...)\nمع إمكانية إضافة زر شفاف بكتابة:\n`النص | اسم الزر - https://t.me/...`", reply_markup=back_menu())
 
     elif call.data == "set_time":
         await db_exec("UPDATE users SET state = 'waiting_for_time' WHERE user_id = ?", (user_id,))
@@ -631,20 +633,20 @@ async def cb_handler(client, call: CallbackQuery):
         grps = await db_exec("SELECT id FROM groups WHERE user_id = ?", (user_id,), fetchall=True)
         msgs = await db_exec("SELECT id FROM messages WHERE user_id = ?", (user_id,), fetchall=True)
         if not accs or not grps or not msgs:
-            await call.answer("❌ يجب إضافة حساب، ومجموعة، ورسالة واحدة على الأقل!", show_alert=True)
+            await call.answer("❌ يجب إضافة حساب، ومجموعة، ورسالة واحدة على الأقل للبدء!", show_alert=True)
             return
         await db_exec("UPDATE users SET active = 1 WHERE user_id = ?", (user_id,))
-        await call.answer("🟢 تم تفعيل النشر التلقائي!", show_alert=True)
+        await call.answer("🟢 تم تفعيل النشر التلقائي بنجاح!", show_alert=True)
         await call.message.edit_text("🟢 **النشر التلقائي يعمل الآن في الخلفية.**", reply_markup=back_menu())
 
     elif call.data == "stop_pub":
         await db_exec("UPDATE users SET active = 0 WHERE user_id = ?", (user_id,))
-        await call.answer("🔴 تم إيقاف النشر.", show_alert=True)
+        await call.answer("🔴 تم إيقاف النشر التلقائي.", show_alert=True)
         await call.message.edit_text("🔴 **تم إيقاف النشر التلقائي.**", reply_markup=back_menu())
 
     elif call.data == "redeem_code_prompt":
         await db_exec("UPDATE users SET state = 'waiting_for_code' WHERE user_id = ?", (user_id,))
-        await call.message.edit_text("🎟️ **أرسل كود Pro الآن:**", reply_markup=back_menu())
+        await call.message.edit_text("🎟️ **أرسل كود Pro الذي حصلت عليه الآن:**", reply_markup=back_menu())
 
     # --- لوحة الأدمن ---
     elif call.data == "admin_panel":
@@ -654,7 +656,7 @@ async def cb_handler(client, call: CallbackQuery):
             [InlineKeyboardButton("🎟️ إنشاء كود Pro", callback_data="admin_gen_code"), InlineKeyboardButton("📁 تصدير DB", callback_data="admin_export_db")],
             [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
         ])
-        await call.message.edit_text("👑 **لوحة تحكم الأدمن:**", reply_markup=admin_kb)
+        await call.message.edit_text("👑 **لوحة تحكم الأدمن الشاملة:**", reply_markup=admin_kb)
 
     elif call.data == "admin_stats":
         if not admin_flag: return
@@ -670,7 +672,7 @@ async def cb_handler(client, call: CallbackQuery):
     elif call.data == "admin_gen_code":
         if not admin_flag: return
         await db_exec("UPDATE users SET state = 'admin_creating_code' WHERE user_id = ?", (user_id,))
-        await call.message.edit_text("🎟️ أرسل بيانات الكود:\n`VIPCODE 30 5`", reply_markup=back_menu())
+        await call.message.edit_text("🎟️ أرسل بيانات الكود بالصيغة التالية:\n`VIPCODE 30 5`\n(الكود الأيام الاستخدامات)", reply_markup=back_menu())
 
     elif call.data == "admin_broadcast":
         if not admin_flag: return
@@ -712,7 +714,7 @@ async def msg_handler(client, message: Message):
                     await db_exec("UPDATE codes SET uses = uses + 1 WHERE code = ?", (code_input,))
                     await db_exec("INSERT INTO code_used (code, user_id) VALUES (?, ?)", (code_input, user_id))
                     await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
-                    await message.reply_text(f"🎉 **تم تفعيل اشتراك Pro لمدة {cd['days']} يوم.**", reply_markup=main_menu(admin_flag, True))
+                    await message.reply_text(f"🎉 **مبروك! تم تفعيل اشتراك Pro لمدة {cd['days']} يوم.**", reply_markup=main_menu(admin_flag, True))
         else:
             await message.reply_text("❌ الكود خاطئ أو غير موجود.")
 
@@ -783,7 +785,7 @@ async def msg_handler(client, message: Message):
             await message.reply_text("✅ **تم ربط الحساب بنجاح!**", reply_markup=main_menu(admin_flag, bool(user["is_pro"])))
         except SessionPasswordNeeded:
             await db_exec("UPDATE users SET state = 'waiting_for_password' WHERE user_id = ?", (user_id,))
-            await message.reply_text("🔐 **أرسل كلمة مرور التحقق بخطوتين:**")
+            await message.reply_text("🔐 **الحساب محمي بالتحقق بخطوتين. أرسل كلمة المرور الآن:**")
             return
         except Exception as e:
             await message.reply_text(f"❌ فشل الدخول: {e}")
@@ -832,7 +834,8 @@ async def msg_handler(client, message: Message):
                     chat = await client.get_chat(g_input)
                     g_title = chat.title
                     g_input = f"@{chat.username}" if chat.username else str(chat.id)
-                except Exception: pass
+                except Exception:
+                    pass
 
         await db_exec("INSERT INTO groups (user_id, chat_id, title) VALUES (?, ?, ?)", (user_id, g_input, g_title))
         await message.reply_text(f"✅ تم حفظ المجموعة: `{g_title}`", reply_markup=back_menu())
@@ -885,22 +888,22 @@ async def msg_handler(client, message: Message):
         try:
             t = int(message.text.strip())
             if t < 10: t = 10
-            await db_exec("UPDATE users SET delay = ?, state = NULL WHERE user_id = ?", (user_id,))
+            await db_exec("UPDATE users SET delay = ?, state = NULL WHERE user_id = ?", (t, user_id))
             await message.reply_text(f"⏱️ تم ضبط الوقت إلى `{t}` ثانية.", reply_markup=back_menu())
         except Exception:
             await message.reply_text("❌ يرجى إرسال رقم صحيح بالثواني.")
 
-# --- تشغيل البوت مع خادم الويب المدمج ---
+# --- التشغيل الكامل والتنظيف ---
 async def main():
     init_db()
-    # تشغيل خادم الويب الخاص بالـ Health Check داخل نفس Async Event Loop
-    await start_health_server()
+    # تشغيل خادم HTTP في الخلفية لإبقاء الخدمة متصلة (Render / Health check)
+    await start_http_server()
     
     asyncio.create_task(cleanup_login_attempts())
     asyncio.create_task(manage_publisher_tasks())
     
     await app.start()
-    logging.info("🚀 تم تشغيل البوت وسيرفر الويب المدمج بنجاح بدون خيوط خارجية!")
+    logging.info("🚀 تم تشغيل البوت وخادم الـ HTTP المحدث بنجاح دون أي أخطاء!")
     await idle()
     await app.stop()
 
