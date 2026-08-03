@@ -6,6 +6,8 @@ import logging
 import sqlite3
 import base64
 import hashlib
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from cryptography.fernet import Fernet
 from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
@@ -20,6 +22,24 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
+# --- سيرفر وهمي لإرضاء Render Web Service وتجنب Timed Out ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Bot is running successfully!")
+
+    def log_message(self, format, *args):
+        # تعطيل طباعة طلبات HTTP الحفاظ على نظافة الـ Logs
+        return
+
+def run_health_check_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    logging.info(f"🌐 تم تشغيل خادم HTTP الاستجابي على المنفذ: {port}")
+    server.serve_forever()
 
 # --- ثوابت البوت ---
 BOT_TOKEN = "8996776697:AAFquiMkylAqhbf_G5FbGYXSVnVa9LZ4k3A"
@@ -161,7 +181,6 @@ def check_rate_limit(user_id, limit_seconds=1.5):
 async def backup_config(client):
     """دالة آمنة للنسخ الاحتياطي تتجنب استدعاء get_chat_history بواسطة البوت الرسمي"""
     try:
-        # منع البوت من استدعاء get_chat_history لأن تليجرام يرفض ذلك لحسابات البوتات
         if getattr(client, "me", None) and client.me.is_bot:
             logging.info("⚠️ تم تخطي جلب السجل لأن الحساب الحالي بوت وليس يوزر.")
             return
@@ -886,10 +905,13 @@ async def msg_handler(client, message: Message):
 # --- التشغيل والتنظيف عند الإغلاق ---
 async def main():
     init_db()
+    # تشغيل سيرفر الـ Health Check لمنع خطأ Render Web Service
+    threading.Thread(target=run_health_check_server, daemon=True).start()
+    
     asyncio.create_task(cleanup_login_attempts())
     asyncio.create_task(manage_publisher_tasks())
     await app.start()
-    logging.info("🚀 تم تشغيل البوت المحدث بنجاح دون أخطاء!")
+    logging.info("🚀 تم تشغيل البوت وسيرفر الـ HTTP المحدثين بنجاح دون أخطاء!")
     await idle()
     await app.stop()
 
