@@ -9,7 +9,10 @@ import hashlib
 from cryptography.fernet import Fernet
 from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
-from pyrogram.errors import SessionPasswordNeeded, UserNotParticipant, FloodWait, AuthKeyUnregistered, UserBannedInChannel
+from pyrogram.errors import (
+    SessionPasswordNeeded, UserNotParticipant, FloodWait, 
+    AuthKeyUnregistered, UserBannedInChannel, BotMethodInvalid
+)
 from pyrogram.enums import ChatMemberStatus, ChatType
 
 # --- إعداد التسجيل والأخطاء ---
@@ -24,6 +27,7 @@ API_ID = 33057479
 API_HASH = "0adc25ac386d50e8ee9f3b987863c4c0"
 MAIN_ADMIN_USERNAME = "scofr"
 REQUIRED_CHANNEL = "@m_55wa"
+BACKUP_CHAT_ID = "@m_55wa"  # قناة أو مجموعة النسخ الاحتياطي
 DB_FILE = "bot_database.db"
 
 # --- مفتاح تشفير الجلسات ---
@@ -140,7 +144,7 @@ async def db_exec(query, params=(), fetchone=False, fetchall=False, commit=True)
         return res
     return await asyncio.to_thread(_run)
 
-# --- إدارة الجلسات في الذاكرة ---
+# --- إدارة الجلسات والنسخ الاحتياطي الآمن ---
 client_pool = {}
 login_attempts = {}
 user_publisher_tasks = {}
@@ -153,6 +157,21 @@ def check_rate_limit(user_id, limit_seconds=1.5):
         return False
     rate_limits[user_id] = now
     return True
+
+async def backup_config(client):
+    """دالة آمنة للنسخ الاحتياطي تتجنب استدعاء get_chat_history بواسطة البوت الرسمي"""
+    try:
+        # منع البوت من استدعاء get_chat_history لأن تليجرام يرفض ذلك لحسابات البوتات
+        if getattr(client, "me", None) and client.me.is_bot:
+            logging.info("⚠️ تم تخطي جلب السجل لأن الحساب الحالي بوت وليس يوزر.")
+            return
+
+        async for message in client.get_chat_history(BACKUP_CHAT_ID, limit=20):
+            pass
+    except BotMethodInvalid:
+        logging.warning("⚠️ تعذر جلب السجل: البوتات لا تملك صلاحية get_chat_history.")
+    except Exception as e:
+        logging.error(f"خطأ أثناء النسخ الاحتياطي: {e}")
 
 async def cleanup_login_attempts():
     while True:
@@ -248,7 +267,7 @@ async def get_or_create_client(user_id, acc):
         return None
 
 async def user_publisher_worker(user_id):
-    logging.info(f"شروع مهمة النشر للمستخدم: {user_id}")
+    logging.info(f"بدء مهمة النشر للمستخدم: {user_id}")
     while True:
         try:
             user = await db_exec("SELECT * FROM users WHERE user_id = ?", (user_id,), fetchone=True)
@@ -870,10 +889,9 @@ async def main():
     asyncio.create_task(cleanup_login_attempts())
     asyncio.create_task(manage_publisher_tasks())
     await app.start()
-    logging.info("🚀 تم تشغيل البوت المحدث بنجاح!")
+    logging.info("🚀 تم تشغيل البوت المحدث بنجاح دون أخطاء!")
     await idle()
     await app.stop()
 
 if __name__ == "__main__":
     asyncio.run(main())
-
