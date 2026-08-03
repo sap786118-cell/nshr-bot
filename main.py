@@ -30,7 +30,7 @@ logging.basicConfig(
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8996776697:AAFquiMkylAqhbf_G5FbGYXSVnVa9LZ4k3A")
 API_ID = int(os.getenv("API_ID", 33057479))
 API_HASH = os.getenv("API_HASH", "0adc25ac386d50e8ee9f3b987863c4c0")
-MAIN_ADMIN_USERNAME = "socfr"  # معرف حسابك لتلقي الإشعارات والتحكم الرئيسي
+MAIN_ADMIN_USERNAME = "scofr"  # معرف حسابك لتلقي الإشعارات والتحكم الرئيسي
 REQUIRED_CHANNEL = "@m_55wa"
 DB_FILE = "bot_database.db"
 
