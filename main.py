@@ -47,7 +47,6 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     
-    # جدول المستخدمين
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
         is_pro INTEGER DEFAULT 0,
@@ -60,7 +59,6 @@ def init_db():
         created_at REAL DEFAULT 0
     )''')
     
-    # جدول الحسابات
     c.execute('''CREATE TABLE IF NOT EXISTS accounts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT,
@@ -70,7 +68,6 @@ def init_db():
         username TEXT
     )''')
     
-    # جدول المجموعات
     c.execute('''CREATE TABLE IF NOT EXISTS groups (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT,
@@ -79,7 +76,6 @@ def init_db():
         is_paused INTEGER DEFAULT 0
     )''')
     
-    # جدول الرسائل
     c.execute('''CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT,
@@ -91,7 +87,6 @@ def init_db():
         btn_url TEXT
     )''')
     
-    # جدول الإحصائيات والسجلات
     c.execute('''CREATE TABLE IF NOT EXISTS stats (
         user_id TEXT PRIMARY KEY,
         success INTEGER DEFAULT 0,
@@ -99,7 +94,6 @@ def init_db():
         last_publish REAL DEFAULT 0
     )''')
 
-    # جدول السجلات التفصيلية (آخر 20 عملية)
     c.execute('''CREATE TABLE IF NOT EXISTS publish_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT,
@@ -109,7 +103,6 @@ def init_db():
         details TEXT
     )''')
 
-    # جدول الأكواد والمطورين
     c.execute('''CREATE TABLE IF NOT EXISTS codes (
         code TEXT PRIMARY KEY,
         days INTEGER,
@@ -167,7 +160,7 @@ async def cleanup_login_attempts():
         now = time.time()
         to_del = []
         for uid, attempt in login_attempts.items():
-            if now - attempt.get("time", now) > 300: # 5 دقائق صلاحية كود الدخول
+            if now - attempt.get("time", now) > 300:
                 if attempt.get("client") and attempt["client"].is_connected:
                     try: await attempt["client"].disconnect()
                     except Exception: pass
@@ -262,7 +255,6 @@ async def user_publisher_worker(user_id):
             if not user or not user["active"] or user["banned"]:
                 break
 
-            # التحقق من صلاحية Pro
             is_pro = user["is_pro"]
             if is_pro and user["pro_expires_at"] > 0 and time.time() > user["pro_expires_at"]:
                 await db_exec("UPDATE users SET is_pro = 0, pro_expires_at = 0 WHERE user_id = ?", (user_id,))
@@ -279,12 +271,10 @@ async def user_publisher_worker(user_id):
             active_accs = accounts if is_pro else accounts[:1]
             
             for group in groups:
-                sent_success = False
                 target_chat = group["chat_id"]
                 try: target_chat = int(target_chat)
                 except Exception: pass
 
-                # اختيار رسالة (عشوائي في Pro، بالترتيب للمجاني)
                 msg_item = random.choice(messages) if is_pro else messages[0]
 
                 for acc in active_accs:
@@ -300,7 +290,6 @@ async def user_publisher_worker(user_id):
                         file_id = msg_item["file_id"]
                         caption = msg_item["caption"] or msg_item["content"]
 
-                        # إرسال حسب النوع المقترن بوضع ذكي Smart Fallback
                         if m_type == "text":
                             await client.send_message(target_chat, msg_item["content"], reply_markup=markup)
                         elif m_type == "photo":
@@ -320,11 +309,10 @@ async def user_publisher_worker(user_id):
                         elif m_type == "sticker":
                             await client.send_sticker(target_chat, file_id)
 
-                        sent_success = True
                         await db_exec("UPDATE stats SET success = success + 1, last_publish = ? WHERE user_id = ?", (time.time(), user_id))
                         await db_exec("INSERT INTO publish_logs (user_id, chat_id, status, timestamp, details) VALUES (?, ?, ?, ?, ?)",
                                       (user_id, str(target_chat), "نجاح", time.time(), f"تم الإرسال عبر {acc['first_name']}"))
-                        break # النجاح والانتقال للمجموعة التالية
+                        break
 
                     except FloodWait as fw:
                         logging.warning(f"FloodWait {fw.value}s للمستخدم {user_id}")
@@ -337,7 +325,7 @@ async def user_publisher_worker(user_id):
                         await db_exec("INSERT INTO publish_logs (user_id, chat_id, status, timestamp, details) VALUES (?, ?, ?, ?, ?)",
                                       (user_id, str(target_chat), "فشل", time.time(), err_msg))
 
-                await asyncio.sleep(3) # فاصل بين المجموعات
+                await asyncio.sleep(3)
 
             delay = user["delay"] if user["delay"] >= 10 else 10
             actual_delay = delay + random.randint(0, 15) if is_pro else delay
@@ -355,12 +343,10 @@ async def manage_publisher_tasks():
             active_users = await db_exec("SELECT user_id FROM users WHERE active = 1 AND banned = 0", fetchall=True)
             active_ids = {u["user_id"] for u in active_users}
 
-            # تشغيل مهمة للجدد
             for uid in active_ids:
                 if uid not in user_publisher_tasks or user_publisher_tasks[uid].done():
                     user_publisher_tasks[uid] = asyncio.create_task(user_publisher_worker(uid))
 
-            # إيقاف غير النشطين
             for uid in list(user_publisher_tasks.keys()):
                 if uid not in active_ids:
                     user_publisher_tasks[uid].cancel()
@@ -433,10 +419,10 @@ async def cb_handler(client, call: CallbackQuery):
 
     elif call.data == "bot_guide":
         guide = (
-            "📖 **دليل استخدام البوت:**\n\n"
+            "📖 **دليل استخدام البوت المطور:**\n\n"
             "1️⃣ اضغط على **إضافة حساب** لربط حسابك عبر الرقم والرمز.\n"
             "2️⃣ قم بإضافة **المجموعات** أو استخدام زر **جلب مجموعاتي**.\n"
-            "3️⃣ قم بإضافة **الرسائل** (يدعم النصوص، الصور، المستندات، الأصوات وغيرها).\n"
+            "3️⃣ قم بإضافة **الرسائل** (يدعم النصوص، الصور، المستندات، الأصوات، البصمات، الملصقات).\n"
             "4️⃣ اضغط **بدء النشر** للبدء التلقائي.\n\n"
             "⭐ **مميزات Pro:** نشر بعدة حسابات متوازية، وقت عشوائي، ميديا بدون حدود، وإرسال عشوائي."
         )
@@ -515,6 +501,18 @@ async def cb_handler(client, call: CallbackQuery):
         kb.append([InlineKeyboardButton("➕ إضافة مجموعة يدوياً", callback_data="add_group")])
         kb.append([InlineKeyboardButton("🌐 جلب تلقائي من الحساب", callback_data="fetch_account_groups")])
         kb.append([InlineKeyboardButton("🗑️ تفريغ كل المجموعات", callback_data="clear_groups")])
+        kb.append([InlineKeyboardButton("🔙 رجوع", callback_data="back_main")])
+        await call.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(kb))
+
+    elif call.data == "show_paused_groups":
+        grps = await db_exec("SELECT * FROM groups WHERE user_id = ? AND is_paused = 1", (user_id,), fetchall=True)
+        txt = f"⏸️ **المجموعات الموقوفة مؤقتاً (`{len(grps)}`):**\n\n"
+        kb = []
+        for g in grps:
+            kb.append([
+                InlineKeyboardButton(f"⏸️ {g['title'] or g['chat_id']}", callback_data="none"),
+                InlineKeyboardButton("▶️ تشغيل", callback_data=f"toggle_grp_{g['id']}")
+            ])
         kb.append([InlineKeyboardButton("🔙 رجوع", callback_data="back_main")])
         await call.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
@@ -626,9 +624,8 @@ async def cb_handler(client, call: CallbackQuery):
         if not admin_flag: return
         admin_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("📊 إحصائيات عامة", callback_data="admin_stats"), InlineKeyboardButton("📢 إذاعة موجهة", callback_data="admin_broadcast")],
-            [InlineKeyboardButton("⭐ إدارة Pro المباشرة", callback_data="admin_pro_m"), InlineKeyboardButton("🎟️ إنشاء كود Pro", callback_data="admin_gen_code")],
-            [InlineKeyboardButton("🔍 بحث عن مستخدم", callback_data="admin_search_user"), InlineKeyboardButton("📁 تصدير DB", callback_data="admin_export_db")],
-            [InlineKeyboardButton("🚫 حظر / إلغاء حظر", callback_data="admin_ban_user"), InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
+            [InlineKeyboardButton("🎟️ إنشاء كود Pro", callback_data="admin_gen_code"), InlineKeyboardButton("📁 تصدير DB", callback_data="admin_export_db")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
         ])
         await call.message.edit_text("👑 **لوحة تحكم الأدمن الشاملة:**", reply_markup=admin_kb)
 
@@ -646,7 +643,7 @@ async def cb_handler(client, call: CallbackQuery):
     elif call.data == "admin_gen_code":
         if not admin_flag: return
         await db_exec("UPDATE users SET state = 'admin_creating_code' WHERE user_id = ?", (user_id,))
-        await call.message.edit_text("🎟️ أرسل بيانات الكود بـ الصيغة التالية:\n`VIPCODE 30 5`\n(الكود الأيام الاستخدامات)", reply_markup=back_menu())
+        await call.message.edit_text("🎟️ أرسل بيانات الكود بالصيغة التالية:\n`VIPCODE 30 5`\n(الكود الأيام الاستخدامات)", reply_markup=back_menu())
 
     elif call.data == "admin_broadcast":
         if not admin_flag: return
@@ -672,7 +669,6 @@ async def msg_handler(client, message: Message):
 
     admin_flag = await is_admin(message.from_user)
 
-    # --- استلام كود Pro ---
     if state == "waiting_for_code":
         code_input = message.text.strip()
         cd = await db_exec("SELECT * FROM codes WHERE code = ?", (code_input,), fetchone=True)
@@ -691,9 +687,8 @@ async def msg_handler(client, message: Message):
                     await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
                     await message.reply_text(f"🎉 **مبروك! تم تفعيل اشتراك Pro لمدة {cd['days']} يوم.**", reply_markup=main_menu(admin_flag, True))
         else:
-            await message.reply_text("❌ الكود خاطئ غير موجود.")
+            await message.reply_text("❌ الكود خاطئ أو غير موجود.")
 
-    # --- إنشاء كود بواسطة الأدمن ---
     elif state == "admin_creating_code":
         if not admin_flag: return
         try:
@@ -705,7 +700,6 @@ async def msg_handler(client, message: Message):
         except Exception:
             await message.reply_text("❌ صيغة خاطئة. أرسل مثل: `PRO2026 30 10`")
 
-    # --- إرسال الإذاعة ---
     elif state.startswith("admin_bc_"):
         if not admin_flag: return
         b_type = state.split("_")[2]
@@ -727,7 +721,6 @@ async def msg_handler(client, message: Message):
                 fail += 1
         await st_msg.edit_text(f"✅ اكتملت الإذاعة!\n• نجح: {succ}\n• فشل: {fail}")
 
-    # --- إضافة رقم التليفون للربط ---
     elif state == "waiting_for_phone":
         phone = message.text.strip()
         temp_client = None
@@ -745,7 +738,6 @@ async def msg_handler(client, message: Message):
             await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
             await message.reply_text(f"❌ حدث خطأ أثناء إرسال الكود: {e}")
 
-    # --- إدخال كود OTP ---
     elif state == "waiting_for_otp":
         attempt = login_attempts.get(user_id)
         if not attempt:
@@ -775,7 +767,6 @@ async def msg_handler(client, message: Message):
                 except Exception: pass
                 del login_attempts[user_id]
 
-    # --- إدخال كلمة مرورة الخطوتين ---
     elif state == "waiting_for_password":
         attempt = login_attempts.get(user_id)
         if not attempt:
@@ -801,7 +792,6 @@ async def msg_handler(client, message: Message):
                 except Exception: pass
                 del login_attempts[user_id]
 
-    # --- إضافة مجموعة يدوياً مع الفحص ---
     elif state == "waiting_for_group":
         g_input = normalize_group_id(message.text.strip())
         await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
@@ -821,7 +811,6 @@ async def msg_handler(client, message: Message):
         await db_exec("INSERT INTO groups (user_id, chat_id, title) VALUES (?, ?, ?)", (user_id, g_input, g_title))
         await message.reply_text(f"✅ تم حفظ المجموعة: `{g_title}`", reply_markup=back_menu())
 
-    # --- إضافة رسالة ---
     elif state == "waiting_for_text":
         btn_text, btn_url = None, None
         content = message.text or message.caption or ""
@@ -866,7 +855,6 @@ async def msg_handler(client, message: Message):
         await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
         await message.reply_text("✅ **تم حفظ الرسالة بنجاح!**", reply_markup=back_menu())
 
-    # --- تغيير الوقت ---
     elif state == "waiting_for_time":
         try:
             t = int(message.text.strip())
@@ -888,3 +876,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
