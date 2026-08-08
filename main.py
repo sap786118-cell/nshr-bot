@@ -30,7 +30,7 @@ logging.basicConfig(
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8996776697:AAFquiMkylAqhbf_G5FbGYXSVnVa9LZ4k3A")
 API_ID = int(os.getenv("API_ID", 33057479))
 API_HASH = os.getenv("API_HASH", "0adc25ac386d50e8ee9f3b987863c4c0")
-MAIN_ADMIN_USERNAME = "scofr"  # معرف حسابك لتلقي الإشعارات والتحكم الرئيسي
+MAIN_ADMIN_USERNAME = "scofr"
 REQUIRED_CHANNEL = "@m_55wa"
 DB_FILE = "bot_database.db"
 
@@ -60,10 +60,11 @@ async def start_http_server():
     await site.start()
     logging.info(f"🌐 تم تشغيل خادم HTTP على المنفذ {port}")
 
-# --- تشفير وحفظ الجلسات ---
+# --- تشفير آمن للجلسات مفصل عن التوكن لحماية البيانات ---
+ENCRYPTION_SECRET = os.getenv("ENCRYPTION_KEY", "SECURE_SECRET_KEY_FOR_SESSIONS_2026")
+
 def get_fernet():
-    secret = BOT_TOKEN
-    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
+    key = base64.urlsafe_b64encode(hashlib.sha256(ENCRYPTION_SECRET.encode()).digest())
     return Fernet(key)
 
 def encrypt_session(val):
@@ -110,8 +111,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT,
         chat_id TEXT,
-        title TEXT,
-        is_paused INTEGER DEFAULT 0
+        title TEXT
     )''')
     
     c.execute('''CREATE TABLE IF NOT EXISTS messages (
@@ -154,13 +154,11 @@ def init_db():
         PRIMARY KEY (code, user_id)
     )''')
 
-    # جدول المطورين مع الصلاحيات
     c.execute('''CREATE TABLE IF NOT EXISTS developers (
         user_id TEXT PRIMARY KEY,
         permissions TEXT DEFAULT 'all'
     )''')
 
-    # جدول إعدادات نصوص وأسماء أزرار البوت
     c.execute('''CREATE TABLE IF NOT EXISTS bot_settings (
         setting_key TEXT PRIMARY KEY,
         setting_value TEXT
@@ -185,7 +183,6 @@ async def db_exec(query, params=(), fetchone=False, fetchall=False, commit=True)
         conn.close()
         return res
     return await asyncio.to_thread(_run)
-
 # --- جلب وحفظ الإعدادات الديناميكية ---
 async def get_setting(key, default_value):
     res = await db_exec("SELECT setting_value FROM bot_settings WHERE setting_key = ?", (key,), fetchone=True)
@@ -266,7 +263,7 @@ def normalize_group_id(g):
         return g_str
     return "@" + g_str
 
-# --- قوائم التحكم المتناسقة والمخصصة ---
+# --- قائمة التحكم الرئيسية الملونة بستايل التليجرام الجديد ---
 async def main_menu(is_admin_user=False, is_pro=False):
     pro_badge = " ⭐ [Pro]" if is_pro else " 👤 [مجاني]"
     
@@ -274,8 +271,6 @@ async def main_menu(is_admin_user=False, is_pro=False):
     btn_add_acc = await get_setting("btn_add_acc", "➕ إضافة حساب")
     btn_grps = await get_setting("btn_grps", "👥 المجموعات")
     btn_fetch_grps = await get_setting("btn_fetch_grps", "🌐 جلب مجموعاتي")
-    btn_paused = await get_setting("btn_paused", "⏸️ المجموعات الموقوفة")
-    btn_dash = await get_setting("btn_dash", "📊 الداشبورد")
     btn_time = await get_setting("btn_time", "⏱️ ضبط الوقت")
     btn_msgs = await get_setting("btn_msgs", "✉️ إدارة الرسائل")
     btn_pro_info = await get_setting("btn_pro_info", "⭐ ميزات برو والاشتراك")
@@ -284,22 +279,27 @@ async def main_menu(is_admin_user=False, is_pro=False):
     btn_stop = await get_setting("btn_stop", "🔴 إيقاف النشر")
 
     keyboard = [
-        [InlineKeyboardButton(f"{btn_acc}{pro_badge}", callback_data="show_accounts"), InlineKeyboardButton(btn_add_acc, callback_data="add_account")],
-        [InlineKeyboardButton(btn_grps, callback_data="show_groups"), InlineKeyboardButton(btn_fetch_grps, callback_data="fetch_account_groups")],
-        [InlineKeyboardButton(btn_paused, callback_data="show_paused_groups"), InlineKeyboardButton(btn_dash, callback_data="show_dashboard")],
-        [InlineKeyboardButton(btn_time, callback_data="set_time"), InlineKeyboardButton(btn_msgs, callback_data="show_texts")],
-        [InlineKeyboardButton(btn_pro_info, callback_data="pro_features_info"), InlineKeyboardButton(btn_redeem, callback_data="redeem_code_prompt")],
-        [InlineKeyboardButton(btn_start, callback_data="start_pub"), InlineKeyboardButton(btn_stop, callback_data="stop_pub")],
-        [InlineKeyboardButton("📖 الشرح والتعليمات", callback_data="bot_guide"), InlineKeyboardButton("👑 الدعم الفني", url=f"https://t.me/{MAIN_ADMIN_USERNAME}")]
+        [InlineKeyboardButton(f"{btn_acc}{pro_badge}", callback_data="show_accounts", style="primary"), 
+         InlineKeyboardButton(btn_add_acc, callback_data="add_account", style="success")],
+        [InlineKeyboardButton(btn_grps, callback_data="show_groups", style="primary"), 
+         InlineKeyboardButton(btn_fetch_grps, callback_data="fetch_account_groups", style="primary")],
+        [InlineKeyboardButton(btn_time, callback_data="set_time"), 
+         InlineKeyboardButton(btn_msgs, callback_data="show_texts")],
+        [InlineKeyboardButton(btn_pro_info, callback_data="pro_features_info", style="primary"), 
+         InlineKeyboardButton(btn_redeem, callback_data="redeem_code_prompt", style="success")],
+        [InlineKeyboardButton(btn_start, callback_data="start_pub", style="success"), 
+         InlineKeyboardButton(btn_stop, callback_data="stop_pub", style="danger")],
+        [InlineKeyboardButton("📖 الشرح والتعليمات", callback_data="bot_guide"), 
+         InlineKeyboardButton("👑 الدعم الفني", url=f"https://t.me/{MAIN_ADMIN_USERNAME}")]
     ]
     if is_admin_user:
-        keyboard.insert(0, [InlineKeyboardButton("🛠️ لوحة تحكم الأدمن", callback_data="admin_panel")])
+        keyboard.insert(0, [InlineKeyboardButton("🛠️ لوحة تحكم الأدمن", callback_data="admin_panel", style="primary")])
     return InlineKeyboardMarkup(keyboard)
 
 def back_menu():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")]])
 
-# --- محرك النشر التلقائي ---
+# --- محرك النشر التلقائي الآمن مع حماية الحسابات ---
 async def get_or_create_client(user_id, acc):
     acc_id = acc["id"]
     pool_key = f"{user_id}_{acc_id}"
@@ -339,7 +339,7 @@ async def user_publisher_worker(user_id):
                 is_pro = False
 
             accounts = await db_exec("SELECT * FROM accounts WHERE user_id = ?", (user_id,), fetchall=True)
-            groups = await db_exec("SELECT * FROM groups WHERE user_id = ? AND is_paused = 0", (user_id,), fetchall=True)
+            groups = await db_exec("SELECT * FROM groups WHERE user_id = ?", (user_id,), fetchall=True)
             messages = await db_exec("SELECT * FROM messages WHERE user_id = ?", (user_id,), fetchall=True)
 
             if not accounts or not groups or not messages:
@@ -413,7 +413,8 @@ async def user_publisher_worker(user_id):
                         await db_exec("INSERT INTO publish_logs (user_id, chat_id, status, timestamp, details) VALUES (?, ?, ?, ?, ?)",
                                       (user_id, str(target_chat), "فشل", time.time(), err_msg))
 
-                await asyncio.sleep(2)
+                # الفاصل بين المجموعات لحماية الحسابات من حظر التليجرام
+                await asyncio.sleep(15)
 
             delay = user["delay"] if user["delay"] >= 10 else 10
             actual_delay = delay + random.randint(0, 15) if is_pro else delay
@@ -458,7 +459,7 @@ def setup_handlers(bot_app):
                 f"❌ **يجب عليك الاشتراك في قناة البوت أولاً لاستخدامه:**\n{REQUIRED_CHANNEL}",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("📢 اشترك الآن", url=f"https://t.me/{REQUIRED_CHANNEL.replace('@','')}")],
-                    [InlineKeyboardButton("✅ تحقق", callback_data="check_sub")]
+                    [InlineKeyboardButton("✅ تحقق", callback_data="check_sub", style="success")]
                 ])
             )
             return
@@ -524,7 +525,7 @@ def setup_handlers(bot_app):
             guide = (
                 "📖 **دليل استخدام البوت المطور:**\n\n"
                 "1️⃣ اضغط على **إضافة حساب** لربط حسابك عبر الرقم والرمز.\n"
-                "2️⃣ قم بإضافة **المجموعات** أو استخدام زر **جلب مجموعاتي**.\n"
+                "2️⃣ قم بضغط **جلب مجموعاتي** لعرض كل جروباتك وتحديد ما تريد إضافته لعملية النشر.\n"
                 "3️⃣ قم بإضافة **الرسائل** (نصوص، صور، فيديو، مستندات، بصمات).\n"
                 "4️⃣ اضغط **بدء النشر** للبدء التلقائي.\n\n"
                 "⭐ **مميزات Pro الجبارة:**\n"
@@ -534,7 +535,6 @@ def setup_handlers(bot_app):
             )
             await call.message.edit_text(guide, reply_markup=back_menu())
 
-        # ==================== قسم ميزات Pro والاشتراك ====================
         elif call.data == "pro_features_info":
             pro_info_txt = (
                 "🚀 **مميزات باقة برو (Pro) الفائقة:**\n\n"
@@ -546,35 +546,11 @@ def setup_handlers(bot_app):
                 "👇 **للإشتراك والتفعيل المباشر أو ادخال كود تفعيل:**"
             )
             pro_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🎟️ تفعيل كود Pro", callback_data="redeem_code_prompt")],
+                [InlineKeyboardButton("🎟️ تفعيل كود Pro", callback_data="redeem_code_prompt", style="success")],
                 [InlineKeyboardButton("💳 التواصل لشراء اشتراك", url=f"https://t.me/{MAIN_ADMIN_USERNAME}")],
-                [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
+                [InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")]
             ])
             await call.message.edit_text(pro_info_txt, reply_markup=pro_kb)
-
-        elif call.data == "show_dashboard":
-            st = await db_exec("SELECT * FROM stats WHERE user_id = ?", (user_id,), fetchone=True)
-            acc_count = (await db_exec("SELECT COUNT(*) as c FROM accounts WHERE user_id = ?", (user_id,), fetchone=True))["c"]
-            grp_count = (await db_exec("SELECT COUNT(*) as c FROM groups WHERE user_id = ?", (user_id,), fetchone=True))["c"]
-            msg_count = (await db_exec("SELECT COUNT(*) as c FROM messages WHERE user_id = ?", (user_id,), fetchone=True))["c"]
-            
-            logs = await db_exec("SELECT * FROM publish_logs WHERE user_id = ? ORDER BY id DESC LIMIT 5", (user_id,), fetchall=True)
-            log_str = ""
-            for l in logs:
-                log_str += f"• `{l['chat_id']}` -> {l['status']} ({l['details']})\n"
-            if not log_str: log_str = "لا توجد عمليات مسبقة."
-
-            dash = (
-                f"📊 **لوحة التحكم والإحصائيات:**\n\n"
-                f"👤 الحسابات المضافة: `{acc_count}`\n"
-                f"👥 الجروبات المضافة: `{grp_count}`\n"
-                f"✉️ الرسائل المخزنة: `{msg_count}`\n\n"
-                f"✅ العمليات الناجحة: `{st['success'] if st else 0}`\n"
-                f"❌ العمليات الفاشلة: `{st['failed'] if st else 0}`\n"
-                f"⚠️ آخر خطأ: `{user['last_error']}`\n\n"
-                f"📋 **آخر 5 عمليات نشر:**\n{log_str}"
-            )
-            await call.message.edit_text(dash, reply_markup=back_menu())
 
         elif call.data == "show_accounts":
             accs = await db_exec("SELECT * FROM accounts WHERE user_id = ?", (user_id,), fetchall=True)
@@ -582,9 +558,9 @@ def setup_handlers(bot_app):
             kb = []
             for a in accs:
                 txt += f"• {a['first_name']} (@{a['username']})\n"
-                kb.append([InlineKeyboardButton(f"🗑️ حذف {a['first_name']}", callback_data=f"del_acc_{a['id']}")])
-            kb.append([InlineKeyboardButton("➕ إضافة حساب", callback_data="add_account")])
-            kb.append([InlineKeyboardButton("🗑️ حذف جميع الحسابات", callback_data="clear_accounts")])
+                kb.append([InlineKeyboardButton(f"🗑️ حذف {a['first_name']}", callback_data=f"del_acc_{a['id']}", style="danger")])
+            kb.append([InlineKeyboardButton("➕ إضافة حساب", callback_data="add_account", style="success")])
+            kb.append([InlineKeyboardButton("🗑️ حذف جميع الحسابات", callback_data="clear_accounts", style="danger")])
             kb.append([InlineKeyboardButton("🔙 رجوع", callback_data="back_main")])
             await call.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
@@ -613,43 +589,83 @@ def setup_handlers(bot_app):
 
         elif call.data == "show_groups":
             grps = await db_exec("SELECT * FROM groups WHERE user_id = ?", (user_id,), fetchall=True)
-            txt = f"👥 **المجموعات المحفوظة (`{len(grps)}`):**\n\n"
+            txt = f"👥 **المجموعات المضافة للنشر (`{len(grps)}`):**\n\n"
             kb = []
             for g in grps:
-                st = "⏸️" if g["is_paused"] else "🟢"
                 kb.append([
-                    InlineKeyboardButton(f"{st} {g['title'] or g['chat_id']}", callback_data="none"),
-                    InlineKeyboardButton("🔄 إيقاف/تشغيل", callback_data=f"toggle_grp_{g['id']}"),
-                    InlineKeyboardButton("🗑️", callback_data=f"del_grp_{g['id']}")
+                    InlineKeyboardButton(f"🗑️ حذف", callback_data=f"del_grp_{g['id']}", style="danger"),
+                    InlineKeyboardButton(f"🟢 {g['title'] or g['chat_id']}", callback_data="none")
                 ])
-            kb.append([InlineKeyboardButton("➕ إضافة مجموعة يدوياً", callback_data="add_group")])
-            kb.append([InlineKeyboardButton("🌐 جلب تلقائي من الحساب", callback_data="fetch_account_groups")])
-            kb.append([InlineKeyboardButton("🗑️ تفريغ كل المجموعات", callback_data="clear_groups")])
+            kb.append([InlineKeyboardButton("➕ إضافة مجموعة يدوياً", callback_data="add_group", style="success")])
+            kb.append([InlineKeyboardButton("🌐 جلب تفاعلي من الحساب", callback_data="fetch_account_groups", style="primary")])
+            kb.append([InlineKeyboardButton("🗑️ تفريغ كل المجموعات", callback_data="clear_groups", style="danger")])
             kb.append([InlineKeyboardButton("🔙 رجوع", callback_data="back_main")])
             await call.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
-        elif call.data == "show_paused_groups":
-            grps = await db_exec("SELECT * FROM groups WHERE user_id = ? AND is_paused = 1", (user_id,), fetchall=True)
-            txt = f"⏸️ **المجموعات الموقوفة مؤقتاً (`{len(grps)}`):**\n\n"
+        # --- ميزة جلب المجموعات التفاعلية كقوائم أزرار ملوّنة ---
+        elif call.data == "fetch_account_groups":
+            accs = await db_exec("SELECT * FROM accounts WHERE user_id = ?", (user_id,), fetchall=True)
+            if not accs:
+                await call.answer("❌ أضف حساباً أولاً للجلب منه!", show_alert=True)
+                return
+            await call.answer("⏳ جاري جلب المجموعات من حسابك...", show_alert=False)
+            client = await get_or_create_client(user_id, accs[0])
+            if not client:
+                await call.message.edit_text("❌ فشل الاتصال بالحساب لجلب المجموعات.", reply_markup=back_menu())
+                return
+
+            saved_grps = await db_exec("SELECT chat_id FROM groups WHERE user_id = ?", (user_id,), fetchall=True)
+            saved_ids = {g["chat_id"] for g in saved_grps}
+
             kb = []
-            for g in grps:
-                kb.append([
-                    InlineKeyboardButton(f"⏸️ {g['title'] or g['chat_id']}", callback_data="none"),
-                    InlineKeyboardButton("▶️ تشغيل", callback_data=f"toggle_grp_{g['id']}")
-                ])
-            kb.append([InlineKeyboardButton("🔙 رجوع", callback_data="back_main")])
-            await call.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(kb))
+            async for dialog in client.get_dialogs(limit=100):
+                if dialog.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+                    chat_identifier = f"@{dialog.chat.username}" if dialog.chat.username else str(dialog.chat.id)
+                    title = dialog.chat.title[:25]
+                    
+                    if chat_identifier in saved_ids:
+                        # الزر مضاف سابقاً -> خيار الحذف (أحمر)
+                        kb.append([
+                            InlineKeyboardButton("🗑️ حذف", callback_data=f"fetch_del_{chat_identifier}", style="danger"),
+                            InlineKeyboardButton(title, callback_data="none")
+                        ])
+                    else:
+                        # الزر غير مضاف -> خيار الإضافة (أخضر)
+                        kb.append([
+                            InlineKeyboardButton("➕ إضافة", callback_data=f"fetch_add_{chat_identifier}_{title}", style="success"),
+                            InlineKeyboardButton(title, callback_data="none")
+                        ])
+
+            kb.append([InlineKeyboardButton("🔙 رجوع المجموعات", callback_data="show_groups")])
+            await call.message.edit_text("🌐 **اختر المجموعات التي تريد إضافتها أو حذفها:**", reply_markup=InlineKeyboardMarkup(kb))
+
+        elif call.data.startswith("fetch_add_"):
+            parts = call.data.split("_", 3)
+            c_id = parts[2]
+            title = parts[3] if len(parts) > 3 else c_id
+            
+            g_count = (await db_exec("SELECT COUNT(*) as c FROM groups WHERE user_id = ?", (user_id,), fetchone=True))["c"]
+            if not is_pro and g_count >= 5:
+                await call.answer("❌ وصلت للحد الأقصى للمجاني (5 مجموعات).", show_alert=True)
+                return
+
+            await db_exec("INSERT INTO groups (user_id, chat_id, title) VALUES (?, ?, ?)", (user_id, c_id, title))
+            await call.answer("✅ تم إضافتها بنجاح!", show_alert=False)
+            # إعادة تحفيز زر الجلب للتحديث
+            call.data = "fetch_account_groups"
+            await cb_handler(client, call)
+
+        elif call.data.startswith("fetch_del_"):
+            c_id = call.data.replace("fetch_del_", "")
+            await db_exec("DELETE FROM groups WHERE user_id = ? AND chat_id = ?", (user_id, c_id))
+            await call.answer("🗑️ تم حذفها من قائمة النشر!", show_alert=False)
+            call.data = "fetch_account_groups"
+            await cb_handler(client, call)
 
         elif call.data.startswith("del_grp_"):
             gid = int(call.data.split("_")[2])
             await db_exec("DELETE FROM groups WHERE id = ? AND user_id = ?", (gid, user_id))
             await call.answer("🗑️ تم حذف المجموعة", show_alert=True)
-            await call.message.edit_text("تم التحديث.", reply_markup=back_menu())
-
-        elif call.data.startswith("toggle_grp_"):
-            gid = int(call.data.split("_")[2])
-            await db_exec("UPDATE groups SET is_paused = CASE WHEN is_paused = 1 THEN 0 ELSE 1 END WHERE id = ? AND user_id = ?", (gid, user_id))
-            await call.answer("🔄 تم تغيير حالة المجموعة", show_alert=True)
             await call.message.edit_text("تم التحديث.", reply_markup=back_menu())
 
         elif call.data == "clear_groups":
@@ -665,26 +681,6 @@ def setup_handlers(bot_app):
             await db_exec("UPDATE users SET state = 'waiting_for_group' WHERE user_id = ?", (user_id,))
             await call.message.edit_text("📥 أرسل معرف السوبر أو الرابط (مثال: `@Group`):", reply_markup=back_menu())
 
-        elif call.data == "fetch_account_groups":
-            accs = await db_exec("SELECT * FROM accounts WHERE user_id = ?", (user_id,), fetchall=True)
-            if not accs:
-                await call.answer("❌ أضف حساباً أولاً للجلب منه!", show_alert=True)
-                return
-            await call.answer("⏳ جاري فحص وجلب المجموعات من حسابك...", show_alert=True)
-            client = await get_or_create_client(user_id, accs[0])
-            if not client:
-                await call.message.edit_text("❌ فشل الاتصال بالحساب لجلب المجموعات.", reply_markup=back_menu())
-                return
-            added = 0
-            async for dialog in client.get_dialogs(limit=100):
-                if dialog.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
-                    chat_identifier = f"@{dialog.chat.username}" if dialog.chat.username else str(dialog.chat.id)
-                    exists = await db_exec("SELECT id FROM groups WHERE user_id = ? AND chat_id = ?", (user_id, chat_identifier), fetchone=True)
-                    if not exists:
-                        await db_exec("INSERT INTO groups (user_id, chat_id, title) VALUES (?, ?, ?)", (user_id, chat_identifier, dialog.chat.title[:30]))
-                        added += 1
-            await call.message.edit_text(f"✅ تم جلب وإضافة `{added}` مجموعة جديدة بنجاح!", reply_markup=back_menu())
-
         elif call.data == "show_texts":
             msgs = await db_exec("SELECT * FROM messages WHERE user_id = ?", (user_id,), fetchall=True)
             txt = f"✉️ **رسائلك المحفوظة (`{len(msgs)}`):**\n\n"
@@ -693,10 +689,10 @@ def setup_handlers(bot_app):
                 prev = (m["content"] or m["caption"] or f"[{m['type']}]")[:30]
                 kb.append([
                     InlineKeyboardButton(f"[{m['type']}] {prev}", callback_data="none"),
-                    InlineKeyboardButton("🗑️ حذف", callback_data=f"del_msg_{m['id']}")
+                    InlineKeyboardButton("🗑️ حذف", callback_data=f"del_msg_{m['id']}", style="danger")
                 ])
-            kb.append([InlineKeyboardButton("➕ إضافة رسالة جديدة", callback_data="add_text")])
-            kb.append([InlineKeyboardButton("🗑️ مسح كل الرسائل", callback_data="clear_texts")])
+            kb.append([InlineKeyboardButton("➕ إضافة رسالة جديدة", callback_data="add_text", style="success")])
+            kb.append([InlineKeyboardButton("🗑️ مسح كل الرسائل", callback_data="clear_texts", style="danger")])
             kb.append([InlineKeyboardButton("🔙 رجوع", callback_data="back_main")])
             await call.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
@@ -750,21 +746,25 @@ def setup_handlers(bot_app):
         elif call.data == "admin_panel":
             if not admin_flag: return
             admin_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🎟️ إنشاء كود Pro", callback_data="admin_gen_code"), InlineKeyboardButton("⭐ إدارة Pro المباشرة", callback_data="admin_manage_pro")],
-                [InlineKeyboardButton("👨‍💻 إدارة المطورين", callback_data="admin_devs_panel"), InlineKeyboardButton("⚙️ تعديل البوت", callback_data="admin_edit_bot")],
-                [InlineKeyboardButton("📊 إحصائيات عامة", callback_data="admin_stats"), InlineKeyboardButton("📢 إذاعة موجهة", callback_data="admin_broadcast")],
-                [InlineKeyboardButton("📁 تصدير DB", callback_data="admin_export_db"), InlineKeyboardButton("🔙 الصفحة الرئيسية", callback_data="back_main")]
+                [InlineKeyboardButton("🎟️ إنشاء كود Pro", callback_data="admin_gen_code", style="success"), 
+                 InlineKeyboardButton("⭐ إدارة Pro المباشرة", callback_data="admin_manage_pro", style="primary")],
+                [InlineKeyboardButton("👨‍💻 إدارة المطورين", callback_data="admin_devs_panel"), 
+                 InlineKeyboardButton("⚙️ تعديل البوت", callback_data="admin_edit_bot")],
+                [InlineKeyboardButton("📊 إحصائيات عامة", callback_data="admin_stats"), 
+                 InlineKeyboardButton("📢 إذاعة موجهة", callback_data="admin_broadcast", style="primary")],
+                [InlineKeyboardButton("📁 تصدير DB", callback_data="admin_export_db"), 
+                 InlineKeyboardButton("🔙 الصفحة الرئيسية", callback_data="back_main", style="danger")]
             ])
             await call.message.edit_text("👑 **لوحة تحكم الأدمن الشاملة:**", reply_markup=admin_kb)
 
-        # ---------------- إدارة المطورين ----------------
         elif call.data == "admin_devs_panel":
             if not admin_flag or not await has_permission(call.from_user, "dev_manage"):
                 await call.answer("❌ ليس لديك صلاحية إدارة المطورين.", show_alert=True)
                 return
             dev_kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📋 قائمة المطورين", callback_data="admin_list_devs")],
-                [InlineKeyboardButton("➕ إضافة مطور", callback_data="admin_add_dev"), InlineKeyboardButton("❌ حذف مطور", callback_data="admin_rem_dev")],
+                [InlineKeyboardButton("➕ إضافة مطور", callback_data="admin_add_dev", style="success"), 
+                 InlineKeyboardButton("❌ حذف مطور", callback_data="admin_rem_dev", style="danger")],
                 [InlineKeyboardButton("🔙 رجوع للأدمن", callback_data="admin_panel")]
             ])
             await call.message.edit_text("👨‍💻 **قسم إدارة المطورين:**\nيمكنك إضافة مطورين وتحديد صلاحياتهم الخاصة.", reply_markup=dev_kb)
@@ -798,14 +798,14 @@ def setup_handlers(bot_app):
             await db_exec("UPDATE users SET state = 'admin_waiting_rem_dev' WHERE user_id = ?", (user_id,))
             await call.message.edit_text("❌ **حذف مطور:**\n\nأرسل آيدي المطور المراد حذفه الآن:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_devs_panel")]]))
 
-        # ---------------- تعديل البوت ----------------
         elif call.data == "admin_edit_bot":
             if not admin_flag or not await has_permission(call.from_user, "edit_bot"):
                 await call.answer("❌ ليس لديك صلاحية تعديل البوت.", show_alert=True)
                 return
             edit_kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📝 تعديل الرسالة الترحيبية", callback_data="edit_welcome_msg")],
-                [InlineKeyboardButton("🔘 تعديل اسم زر المجموعات", callback_data="edit_btn_grps"), InlineKeyboardButton("🔘 تعديل اسم زر إضافة حساب", callback_data="edit_btn_add_acc")],
+                [InlineKeyboardButton("🔘 تعديل اسم زر المجموعات", callback_data="edit_btn_grps"), 
+                 InlineKeyboardButton("🔘 تعديل اسم زر إضافة حساب", callback_data="edit_btn_add_acc")],
                 [InlineKeyboardButton("🔙 رجوع للأدمن", callback_data="admin_panel")]
             ])
             await call.message.edit_text("⚙️ **قسم تعديل واجهة البوت والرسائل:**", reply_markup=edit_kb)
@@ -825,7 +825,6 @@ def setup_handlers(bot_app):
             await db_exec("UPDATE users SET state = ? WHERE user_id = ?", (f"admin_edit_btn_{btn_type}", user_id))
             await call.message.edit_text("🔘 **أرسل الاسم الجديد للزر الآن:**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_edit_bot")]]))
 
-        # ---------------- باقي خيارات الأدمن ----------------
         elif call.data == "admin_gen_code":
             if not admin_flag: return
             await db_exec("UPDATE users SET state = 'admin_creating_code' WHERE user_id = ?", (user_id,))
@@ -835,7 +834,8 @@ def setup_handlers(bot_app):
             if not admin_flag: return
             pro_kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📋 المشتركين في Pro", callback_data="admin_list_pro")],
-                [InlineKeyboardButton("➕ تفعيل Pro لمستخدم", callback_data="admin_add_pro_manual"), InlineKeyboardButton("❌ إلغاء Pro لمستخدم", callback_data="admin_rem_pro_manual")],
+                [InlineKeyboardButton("➕ تفعيل Pro لمستخدم", callback_data="admin_add_pro_manual", style="success"), 
+                 InlineKeyboardButton("❌ إلغاء Pro لمستخدم", callback_data="admin_rem_pro_manual", style="danger")],
                 [InlineKeyboardButton("🔙 رجوع للأدمن", callback_data="admin_panel")]
             ])
             await call.message.edit_text("⭐ **إدارة اشتراكات Pro المباشرة:**", reply_markup=pro_kb)
@@ -879,8 +879,10 @@ def setup_handlers(bot_app):
         elif call.data == "admin_broadcast":
             if not admin_flag: return
             b_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📢 للجميع", callback_data="bc_all"), InlineKeyboardButton("⭐ للـ Pro فقط", callback_data="bc_pro")],
-                [InlineKeyboardButton("👤 للمجاني فقط", callback_data="bc_free"), InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]
+                [InlineKeyboardButton("📢 للجميع", callback_data="bc_all"), 
+                 InlineKeyboardButton("⭐ للـ Pro فقط", callback_data="bc_pro")],
+                [InlineKeyboardButton("👤 للمجاني فقط", callback_data="bc_free"), 
+                 InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]
             ])
             await call.message.edit_text("📢 **اختر الفئة الموجه لها الإذاعة:**", reply_markup=b_kb)
 
@@ -889,7 +891,6 @@ def setup_handlers(bot_app):
             target_type = call.data.split("_")[1]
             await db_exec("UPDATE users SET state = ? WHERE user_id = ?", (f"admin_bc_{target_type}", user_id))
             await call.message.edit_text(f"📢 أرسل الرسالة الآن للإذاعة لفئة (`{target_type}`):", reply_markup=back_menu())
-
     # ==================== معالجة الرسائل العادية والمدخلات ====================
     @bot_app.on_message(~filters.command("start"))
     async def msg_handler(client, message: Message):
@@ -902,7 +903,7 @@ def setup_handlers(bot_app):
 
         admin_flag = await is_admin(message.from_user)
 
-        # إضافة / حذف مطورين
+        # إضافة / حذف مطورين بدون ثغرة SQL
         if state == "admin_waiting_add_dev":
             if not admin_flag: return
             try:
@@ -922,7 +923,6 @@ def setup_handlers(bot_app):
             await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
             await message.reply_text(f"✅ تم حذف المطور `{dev_id}` بنجاح.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إدارة المطورين", callback_data="admin_devs_panel")]]))
 
-        # تعديل واجهة البوت
         elif state == "admin_edit_welcome":
             if not admin_flag: return
             await set_setting("welcome_msg", message.text)
@@ -936,7 +936,6 @@ def setup_handlers(bot_app):
             await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
             await message.reply_text("✅ تم تغيير اسم الزر بنجاح!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 تعديل البوت", callback_data="admin_edit_bot")]]))
 
-        # كود Pro
         elif state == "waiting_for_code":
             code_input = message.text.strip()
             cd = await db_exec("SELECT * FROM codes WHERE code = ?", (code_input,), fetchone=True)
@@ -1020,7 +1019,7 @@ def setup_handlers(bot_app):
                 try:
                     await message.copy(chat_id=int(u["user_id"]))
                     succ += 1
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(0.3)
                 except Exception:
                     fail += 1
             await st_msg.edit_text(f"✅ اكتملت الإذاعة!\n• نجح: {succ}\n• فشل: {fail}")
