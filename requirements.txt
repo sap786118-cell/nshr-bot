@@ -1,4 +1,4 @@
-git+https://github.com/TelegramClient/pyrogram.git
+hydrogram
 tgcrypto
 aiohttp
 cryptography
