@@ -10,15 +10,15 @@ import hashlib
 from datetime import datetime
 from aiohttp import web
 from cryptography.fernet import Fernet
-from pyrogram import Client, filters, idle
-from pyrogram.types import (
+from hydrogram import Client, filters, idle
+from hydrogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 )
-from pyrogram.errors import (
+from hydrogram.errors import (
     SessionPasswordNeeded, UserNotParticipant, FloodWait, 
     AuthKeyUnregistered, UserBannedInChannel, BotMethodInvalid
 )
-from pyrogram.enums import ChatMemberStatus, ChatType, ChatAction
+from hydrogram.enums import ChatMemberStatus, ChatType, ChatAction
 
 # --- إعداد التسجيل والأخطاء ---
 logging.basicConfig(
