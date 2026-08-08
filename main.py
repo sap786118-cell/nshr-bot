@@ -10,15 +10,28 @@ import hashlib
 from datetime import datetime
 from aiohttp import web
 from cryptography.fernet import Fernet
-from hydrogram import Client, filters, idle
-from hydrogram.types import (
+from pyrogram import Client, filters, idle
+from pyrogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 )
-from hydrogram.errors import (
+from pyrogram.errors import (
     SessionPasswordNeeded, UserNotParticipant, FloodWait, 
     AuthKeyUnregistered, UserBannedInChannel, BotMethodInvalid
 )
-from hydrogram.enums import ChatMemberStatus, ChatType, ChatAction
+from pyrogram.enums import ChatMemberStatus, ChatType, ChatAction
+
+# --- كلاس خاص لدعم تلوين الأزرار المحدث بدون أخطاء ---
+class StyledButton(InlineKeyboardButton):
+    def __init__(self, text, callback_data=None, url=None, style=None, **kwargs):
+        super().__init__(text, callback_data=callback_data, url=url, **kwargs)
+        if style:
+            self.style = style
+
+    def write(self):
+        btn = super().write()
+        if hasattr(self, "style") and self.style:
+            btn["style"] = self.style
+        return btn
 
 # --- إعداد التسجيل والأخطاء ---
 logging.basicConfig(
@@ -263,7 +276,7 @@ def normalize_group_id(g):
         return g_str
     return "@" + g_str
 
-# --- قائمة التحكم الرئيسية الملونة بستايل التليجرام الجديد ---
+# --- قائمة التحكم الرئيسية بالأزرار الملونة عبر StyledButton ---
 async def main_menu(is_admin_user=False, is_pro=False):
     pro_badge = " ⭐ [Pro]" if is_pro else " 👤 [مجاني]"
     
@@ -279,27 +292,27 @@ async def main_menu(is_admin_user=False, is_pro=False):
     btn_stop = await get_setting("btn_stop", "🔴 إيقاف النشر")
 
     keyboard = [
-        [InlineKeyboardButton(f"{btn_acc}{pro_badge}", callback_data="show_accounts", style="primary"), 
-         InlineKeyboardButton(btn_add_acc, callback_data="add_account", style="success")],
-        [InlineKeyboardButton(btn_grps, callback_data="show_groups", style="primary"), 
-         InlineKeyboardButton(btn_fetch_grps, callback_data="fetch_account_groups", style="primary")],
-        [InlineKeyboardButton(btn_time, callback_data="set_time"), 
-         InlineKeyboardButton(btn_msgs, callback_data="show_texts")],
-        [InlineKeyboardButton(btn_pro_info, callback_data="pro_features_info", style="primary"), 
-         InlineKeyboardButton(btn_redeem, callback_data="redeem_code_prompt", style="success")],
-        [InlineKeyboardButton(btn_start, callback_data="start_pub", style="success"), 
-         InlineKeyboardButton(btn_stop, callback_data="stop_pub", style="danger")],
-        [InlineKeyboardButton("📖 الشرح والتعليمات", callback_data="bot_guide"), 
-         InlineKeyboardButton("👑 الدعم الفني", url=f"https://t.me/{MAIN_ADMIN_USERNAME}")]
+        [StyledButton(f"{btn_acc}{pro_badge}", callback_data="show_accounts", style="primary"), 
+         StyledButton(btn_add_acc, callback_data="add_account", style="success")],
+        [StyledButton(btn_grps, callback_data="show_groups", style="primary"), 
+         StyledButton(btn_fetch_grps, callback_data="fetch_account_groups", style="primary")],
+        [StyledButton(btn_time, callback_data="set_time"), 
+         StyledButton(btn_msgs, callback_data="show_texts")],
+        [StyledButton(btn_pro_info, callback_data="pro_features_info", style="primary"), 
+         StyledButton(btn_redeem, callback_data="redeem_code_prompt", style="success")],
+        [StyledButton(btn_start, callback_data="start_pub", style="success"), 
+         StyledButton(btn_stop, callback_data="stop_pub", style="danger")],
+        [StyledButton("📖 الشرح والتعليمات", callback_data="bot_guide"), 
+         StyledButton("👑 الدعم الفني", url=f"https://t.me/{MAIN_ADMIN_USERNAME}")]
     ]
     if is_admin_user:
-        keyboard.insert(0, [InlineKeyboardButton("🛠️ لوحة تحكم الأدمن", callback_data="admin_panel", style="primary")])
+        keyboard.insert(0, [StyledButton("🛠️ لوحة تحكم الأدمن", callback_data="admin_panel", style="primary")])
     return InlineKeyboardMarkup(keyboard)
 
 def back_menu():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")]])
+    return InlineKeyboardMarkup([[StyledButton("🔙 رجوع", callback_data="back_main", style="danger")]])
 
-# --- محرك النشر التلقائي الآمن مع حماية الحسابات ---
+# --- محرك النشر التلقائي المطور ---
 async def get_or_create_client(user_id, acc):
     acc_id = acc["id"]
     pool_key = f"{user_id}_{acc_id}"
@@ -413,7 +426,6 @@ async def user_publisher_worker(user_id):
                         await db_exec("INSERT INTO publish_logs (user_id, chat_id, status, timestamp, details) VALUES (?, ?, ?, ?, ?)",
                                       (user_id, str(target_chat), "فشل", time.time(), err_msg))
 
-                # الفاصل بين المجموعات لحماية الحسابات من حظر التليجرام
                 await asyncio.sleep(15)
 
             delay = user["delay"] if user["delay"] >= 10 else 10
@@ -444,7 +456,6 @@ async def manage_publisher_tasks():
         except Exception as e:
             logging.error(f"خطأ مدير مهام النشر: {e}")
         await asyncio.sleep(5)
-
 # --- معالجة الأوامر والأحداث ---
 def setup_handlers(bot_app):
     @bot_app.on_message(filters.command("start"))
@@ -459,7 +470,7 @@ def setup_handlers(bot_app):
                 f"❌ **يجب عليك الاشتراك في قناة البوت أولاً لاستخدامه:**\n{REQUIRED_CHANNEL}",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("📢 اشترك الآن", url=f"https://t.me/{REQUIRED_CHANNEL.replace('@','')}")],
-                    [InlineKeyboardButton("✅ تحقق", callback_data="check_sub", style="success")]
+                    [StyledButton("✅ تحقق", callback_data="check_sub", style="success")]
                 ])
             )
             return
@@ -546,9 +557,9 @@ def setup_handlers(bot_app):
                 "👇 **للإشتراك والتفعيل المباشر أو ادخال كود تفعيل:**"
             )
             pro_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🎟️ تفعيل كود Pro", callback_data="redeem_code_prompt", style="success")],
+                [StyledButton("🎟️ تفعيل كود Pro", callback_data="redeem_code_prompt", style="success")],
                 [InlineKeyboardButton("💳 التواصل لشراء اشتراك", url=f"https://t.me/{MAIN_ADMIN_USERNAME}")],
-                [InlineKeyboardButton("🔙 رجوع", callback_data="back_main", style="danger")]
+                [StyledButton("🔙 رجوع", callback_data="back_main", style="danger")]
             ])
             await call.message.edit_text(pro_info_txt, reply_markup=pro_kb)
 
@@ -558,10 +569,10 @@ def setup_handlers(bot_app):
             kb = []
             for a in accs:
                 txt += f"• {a['first_name']} (@{a['username']})\n"
-                kb.append([InlineKeyboardButton(f"🗑️ حذف {a['first_name']}", callback_data=f"del_acc_{a['id']}", style="danger")])
-            kb.append([InlineKeyboardButton("➕ إضافة حساب", callback_data="add_account", style="success")])
-            kb.append([InlineKeyboardButton("🗑️ حذف جميع الحسابات", callback_data="clear_accounts", style="danger")])
-            kb.append([InlineKeyboardButton("🔙 رجوع", callback_data="back_main")])
+                kb.append([StyledButton(f"🗑️ حذف {a['first_name']}", callback_data=f"del_acc_{a['id']}", style="danger")])
+            kb.append([StyledButton("➕ إضافة حساب", callback_data="add_account", style="success")])
+            kb.append([StyledButton("🗑️ حذف جميع الحسابات", callback_data="clear_accounts", style="danger")])
+            kb.append([StyledButton("🔙 رجوع", callback_data="back_main")])
             await call.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
         elif call.data.startswith("del_acc_"):
@@ -593,16 +604,15 @@ def setup_handlers(bot_app):
             kb = []
             for g in grps:
                 kb.append([
-                    InlineKeyboardButton(f"🗑️ حذف", callback_data=f"del_grp_{g['id']}", style="danger"),
+                    StyledButton(f"🗑️ حذف", callback_data=f"del_grp_{g['id']}", style="danger"),
                     InlineKeyboardButton(f"🟢 {g['title'] or g['chat_id']}", callback_data="none")
                 ])
-            kb.append([InlineKeyboardButton("➕ إضافة مجموعة يدوياً", callback_data="add_group", style="success")])
-            kb.append([InlineKeyboardButton("🌐 جلب تفاعلي من الحساب", callback_data="fetch_account_groups", style="primary")])
-            kb.append([InlineKeyboardButton("🗑️ تفريغ كل المجموعات", callback_data="clear_groups", style="danger")])
-            kb.append([InlineKeyboardButton("🔙 رجوع", callback_data="back_main")])
+            kb.append([StyledButton("➕ إضافة مجموعة يدوياً", callback_data="add_group", style="success")])
+            kb.append([StyledButton("🌐 جلب تفاعلي من الحساب", callback_data="fetch_account_groups", style="primary")])
+            kb.append([StyledButton("🗑️ تفريغ كل المجموعات", callback_data="clear_groups", style="danger")])
+            kb.append([StyledButton("🔙 رجوع", callback_data="back_main")])
             await call.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
-        # --- ميزة جلب المجموعات التفاعلية كقوائم أزرار ملوّنة ---
         elif call.data == "fetch_account_groups":
             accs = await db_exec("SELECT * FROM accounts WHERE user_id = ?", (user_id,), fetchall=True)
             if not accs:
@@ -624,19 +634,17 @@ def setup_handlers(bot_app):
                     title = dialog.chat.title[:25]
                     
                     if chat_identifier in saved_ids:
-                        # الزر مضاف سابقاً -> خيار الحذف (أحمر)
                         kb.append([
-                            InlineKeyboardButton("🗑️ حذف", callback_data=f"fetch_del_{chat_identifier}", style="danger"),
+                            StyledButton("🗑️ حذف", callback_data=f"fetch_del_{chat_identifier}", style="danger"),
                             InlineKeyboardButton(title, callback_data="none")
                         ])
                     else:
-                        # الزر غير مضاف -> خيار الإضافة (أخضر)
                         kb.append([
-                            InlineKeyboardButton("➕ إضافة", callback_data=f"fetch_add_{chat_identifier}_{title}", style="success"),
+                            StyledButton("➕ إضافة", callback_data=f"fetch_add_{chat_identifier}_{title}", style="success"),
                             InlineKeyboardButton(title, callback_data="none")
                         ])
 
-            kb.append([InlineKeyboardButton("🔙 رجوع المجموعات", callback_data="show_groups")])
+            kb.append([StyledButton("🔙 رجوع المجموعات", callback_data="show_groups")])
             await call.message.edit_text("🌐 **اختر المجموعات التي تريد إضافتها أو حذفها:**", reply_markup=InlineKeyboardMarkup(kb))
 
         elif call.data.startswith("fetch_add_"):
@@ -651,7 +659,6 @@ def setup_handlers(bot_app):
 
             await db_exec("INSERT INTO groups (user_id, chat_id, title) VALUES (?, ?, ?)", (user_id, c_id, title))
             await call.answer("✅ تم إضافتها بنجاح!", show_alert=False)
-            # إعادة تحفيز زر الجلب للتحديث
             call.data = "fetch_account_groups"
             await cb_handler(client, call)
 
@@ -689,11 +696,11 @@ def setup_handlers(bot_app):
                 prev = (m["content"] or m["caption"] or f"[{m['type']}]")[:30]
                 kb.append([
                     InlineKeyboardButton(f"[{m['type']}] {prev}", callback_data="none"),
-                    InlineKeyboardButton("🗑️ حذف", callback_data=f"del_msg_{m['id']}", style="danger")
+                    StyledButton("🗑️ حذف", callback_data=f"del_msg_{m['id']}", style="danger")
                 ])
-            kb.append([InlineKeyboardButton("➕ إضافة رسالة جديدة", callback_data="add_text", style="success")])
-            kb.append([InlineKeyboardButton("🗑️ مسح كل الرسائل", callback_data="clear_texts", style="danger")])
-            kb.append([InlineKeyboardButton("🔙 رجوع", callback_data="back_main")])
+            kb.append([StyledButton("➕ إضافة رسالة جديدة", callback_data="add_text", style="success")])
+            kb.append([StyledButton("🗑️ مسح كل الرسائل", callback_data="clear_texts", style="danger")])
+            kb.append([StyledButton("🔙 رجوع", callback_data="back_main")])
             await call.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
         elif call.data.startswith("del_msg_"):
@@ -746,14 +753,14 @@ def setup_handlers(bot_app):
         elif call.data == "admin_panel":
             if not admin_flag: return
             admin_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🎟️ إنشاء كود Pro", callback_data="admin_gen_code", style="success"), 
-                 InlineKeyboardButton("⭐ إدارة Pro المباشرة", callback_data="admin_manage_pro", style="primary")],
-                [InlineKeyboardButton("👨‍💻 إدارة المطورين", callback_data="admin_devs_panel"), 
-                 InlineKeyboardButton("⚙️ تعديل البوت", callback_data="admin_edit_bot")],
-                [InlineKeyboardButton("📊 إحصائيات عامة", callback_data="admin_stats"), 
-                 InlineKeyboardButton("📢 إذاعة موجهة", callback_data="admin_broadcast", style="primary")],
-                [InlineKeyboardButton("📁 تصدير DB", callback_data="admin_export_db"), 
-                 InlineKeyboardButton("🔙 الصفحة الرئيسية", callback_data="back_main", style="danger")]
+                [StyledButton("🎟️ إنشاء كود Pro", callback_data="admin_gen_code", style="success"), 
+                 StyledButton("⭐ إدارة Pro المباشرة", callback_data="admin_manage_pro", style="primary")],
+                [StyledButton("👨‍💻 إدارة المطورين", callback_data="admin_devs_panel"), 
+                 StyledButton("⚙️ تعديل البوت", callback_data="admin_edit_bot")],
+                [StyledButton("📊 إحصائيات عامة", callback_data="admin_stats"), 
+                 StyledButton("📢 إذاعة موجهة", callback_data="admin_broadcast", style="primary")],
+                [StyledButton("📁 تصدير DB", callback_data="admin_export_db"), 
+                 StyledButton("🔙 الصفحة الرئيسية", callback_data="back_main", style="danger")]
             ])
             await call.message.edit_text("👑 **لوحة تحكم الأدمن الشاملة:**", reply_markup=admin_kb)
 
@@ -762,10 +769,10 @@ def setup_handlers(bot_app):
                 await call.answer("❌ ليس لديك صلاحية إدارة المطورين.", show_alert=True)
                 return
             dev_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📋 قائمة المطورين", callback_data="admin_list_devs")],
-                [InlineKeyboardButton("➕ إضافة مطور", callback_data="admin_add_dev", style="success"), 
-                 InlineKeyboardButton("❌ حذف مطور", callback_data="admin_rem_dev", style="danger")],
-                [InlineKeyboardButton("🔙 رجوع للأدمن", callback_data="admin_panel")]
+                [StyledButton("📋 قائمة المطورين", callback_data="admin_list_devs")],
+                [StyledButton("➕ إضافة مطور", callback_data="admin_add_dev", style="success"), 
+                 StyledButton("❌ حذف مطور", callback_data="admin_rem_dev", style="danger")],
+                [StyledButton("🔙 رجوع للأدمن", callback_data="admin_panel")]
             ])
             await call.message.edit_text("👨‍💻 **قسم إدارة المطورين:**\nيمكنك إضافة مطورين وتحديد صلاحياتهم الخاصة.", reply_markup=dev_kb)
 
@@ -777,7 +784,7 @@ def setup_handlers(bot_app):
                 txt += f"• الآيدي: `{d['user_id']}` | الصلاحيات: `{d['permissions']}`\n"
             if not devs:
                 txt += "لا يوجد مطورين مضافين حالياً."
-            await call.message.edit_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_devs_panel")]]))
+            await call.message.edit_text(txt, reply_markup=InlineKeyboardMarkup([[StyledButton("🔙 رجوع", callback_data="admin_devs_panel")]]))
 
         elif call.data == "admin_add_dev":
             if not admin_flag: return
@@ -791,22 +798,22 @@ def setup_handlers(bot_app):
                 "• `codes,pro_manage,broadcast` : صلايحات محددة مفصولة بفاصلة.\n\n"
                 "مثال:\n`123456789 all`"
             )
-            await call.message.edit_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_devs_panel")]]))
+            await call.message.edit_text(txt, reply_markup=InlineKeyboardMarkup([[StyledButton("🔙 إلغاء", callback_data="admin_devs_panel")]]))
 
         elif call.data == "admin_rem_dev":
             if not admin_flag: return
             await db_exec("UPDATE users SET state = 'admin_waiting_rem_dev' WHERE user_id = ?", (user_id,))
-            await call.message.edit_text("❌ **حذف مطور:**\n\nأرسل آيدي المطور المراد حذفه الآن:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_devs_panel")]]))
+            await call.message.edit_text("❌ **حذف مطور:**\n\nأرسل آيدي المطور المراد حذفه الآن:", reply_markup=InlineKeyboardMarkup([[StyledButton("🔙 إلغاء", callback_data="admin_devs_panel")]]))
 
         elif call.data == "admin_edit_bot":
             if not admin_flag or not await has_permission(call.from_user, "edit_bot"):
                 await call.answer("❌ ليس لديك صلاحية تعديل البوت.", show_alert=True)
                 return
             edit_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📝 تعديل الرسالة الترحيبية", callback_data="edit_welcome_msg")],
-                [InlineKeyboardButton("🔘 تعديل اسم زر المجموعات", callback_data="edit_btn_grps"), 
-                 InlineKeyboardButton("🔘 تعديل اسم زر إضافة حساب", callback_data="edit_btn_add_acc")],
-                [InlineKeyboardButton("🔙 رجوع للأدمن", callback_data="admin_panel")]
+                [StyledButton("📝 تعديل الرسالة الترحيبية", callback_data="edit_welcome_msg")],
+                [StyledButton("🔘 تعديل اسم زر المجموعات", callback_data="edit_btn_grps"), 
+                 StyledButton("🔘 تعديل اسم زر إضافة حساب", callback_data="edit_btn_add_acc")],
+                [StyledButton("🔙 رجوع للأدمن", callback_data="admin_panel")]
             ])
             await call.message.edit_text("⚙️ **قسم تعديل واجهة البوت والرسائل:**", reply_markup=edit_kb)
 
@@ -816,27 +823,27 @@ def setup_handlers(bot_app):
             await call.message.edit_text(
                 "📝 **أرسل الرسالة الترحيبية الجديدة الآن:**\n\n"
                 "يمكنك استخدام `{name}` لاسم المستخدم و `{pro_status}` لرتبة المستخدم.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_edit_bot")]])
+                reply_markup=InlineKeyboardMarkup([[StyledButton("🔙 إلغاء", callback_data="admin_edit_bot")]])
             )
 
         elif call.data.startswith("edit_btn_"):
             if not admin_flag: return
             btn_type = call.data.replace("edit_btn_", "")
             await db_exec("UPDATE users SET state = ? WHERE user_id = ?", (f"admin_edit_btn_{btn_type}", user_id))
-            await call.message.edit_text("🔘 **أرسل الاسم الجديد للزر الآن:**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_edit_bot")]]))
+            await call.message.edit_text("🔘 **أرسل الاسم الجديد للزر الآن:**", reply_markup=InlineKeyboardMarkup([[StyledButton("🔙 إلغاء", callback_data="admin_edit_bot")]]))
 
         elif call.data == "admin_gen_code":
             if not admin_flag: return
             await db_exec("UPDATE users SET state = 'admin_creating_code' WHERE user_id = ?", (user_id,))
-            await call.message.edit_text("🎟️ **إنشاء كود Pro جديد:**\n\nأرسل بيانات الكود بالصيغة التالية:\n`الكود الأيام الاستخدامات`\n\nمثال:\n`VIP2026 30 5`", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_panel")]]))
+            await call.message.edit_text("🎟️ **إنشاء كود Pro جديد:**\n\nأرسل بيانات الكود بالصيغة التالية:\n`الكود الأيام الاستخدامات`\n\nمثال:\n`VIP2026 30 5`", reply_markup=InlineKeyboardMarkup([[StyledButton("🔙 إلغاء", callback_data="admin_panel")]]))
 
         elif call.data == "admin_manage_pro":
             if not admin_flag: return
             pro_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📋 المشتركين في Pro", callback_data="admin_list_pro")],
-                [InlineKeyboardButton("➕ تفعيل Pro لمستخدم", callback_data="admin_add_pro_manual", style="success"), 
-                 InlineKeyboardButton("❌ إلغاء Pro لمستخدم", callback_data="admin_rem_pro_manual", style="danger")],
-                [InlineKeyboardButton("🔙 رجوع للأدمن", callback_data="admin_panel")]
+                [StyledButton("📋 المشتركين في Pro", callback_data="admin_list_pro")],
+                [StyledButton("➕ تفعيل Pro لمستخدم", callback_data="admin_add_pro_manual", style="success"), 
+                 StyledButton("❌ إلغاء Pro لمستخدم", callback_data="admin_rem_pro_manual", style="danger")],
+                [StyledButton("🔙 رجوع للأدمن", callback_data="admin_panel")]
             ])
             await call.message.edit_text("⭐ **إدارة اشتراكات Pro المباشرة:**", reply_markup=pro_kb)
 
@@ -853,17 +860,17 @@ def setup_handlers(bot_app):
                 txt += f"• `{u_id}` | {u_name} | ينتهي: `{exp}`\n"
             if not pro_users:
                 txt += "لا يوجد مشتركين حالياً."
-            await call.message.edit_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_manage_pro")]]))
+            await call.message.edit_text(txt, reply_markup=InlineKeyboardMarkup([[StyledButton("🔙 رجوع", callback_data="admin_manage_pro")]]))
 
         elif call.data == "admin_add_pro_manual":
             if not admin_flag: return
             await db_exec("UPDATE users SET state = 'admin_waiting_add_pro' WHERE user_id = ?", (user_id,))
-            await call.message.edit_text("➕ **تفعيل Pro يدوياً:**\n\nأرسل الآيدي والأيام:\n`الآيدي الأيام`\n\nمثال:\n`123456789 30`", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_manage_pro")]]))
+            await call.message.edit_text("➕ **تفعيل Pro يدوياً:**\n\nأرسل الآيدي والأيام:\n`الآيدي الأيام`\n\nمثال:\n`123456789 30`", reply_markup=InlineKeyboardMarkup([[StyledButton("🔙 إلغاء", callback_data="admin_manage_pro")]]))
 
         elif call.data == "admin_rem_pro_manual":
             if not admin_flag: return
             await db_exec("UPDATE users SET state = 'admin_waiting_rem_pro' WHERE user_id = ?", (user_id,))
-            await call.message.edit_text("❌ **إلغاء Pro لمستخدم:**\n\nأرسل آيدي المستخدم (ID) لإلغاء تفعيل Pro عنه فوراً:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إلغاء", callback_data="admin_manage_pro")]]))
+            await call.message.edit_text("❌ **إلغاء Pro لمستخدم:**\n\nأرسل آيدي المستخدم (ID) لإلغاء تفعيل Pro عنه فوراً:", reply_markup=InlineKeyboardMarkup([[StyledButton("🔙 إلغاء", callback_data="admin_manage_pro")]]))
 
         elif call.data == "admin_stats":
             if not admin_flag: return
@@ -879,10 +886,10 @@ def setup_handlers(bot_app):
         elif call.data == "admin_broadcast":
             if not admin_flag: return
             b_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📢 للجميع", callback_data="bc_all"), 
-                 InlineKeyboardButton("⭐ للـ Pro فقط", callback_data="bc_pro")],
-                [InlineKeyboardButton("👤 للمجاني فقط", callback_data="bc_free"), 
-                 InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]
+                [StyledButton("📢 للجميع", callback_data="bc_all"), 
+                 StyledButton("⭐ للـ Pro فقط", callback_data="bc_pro")],
+                [StyledButton("👤 للمجاني فقط", callback_data="bc_free"), 
+                 StyledButton("🔙 رجوع", callback_data="admin_panel")]
             ])
             await call.message.edit_text("📢 **اختر الفئة الموجه لها الإذاعة:**", reply_markup=b_kb)
 
@@ -912,7 +919,7 @@ def setup_handlers(bot_app):
                 perms = parts[1] if len(parts) > 1 else "all"
                 await db_exec("INSERT OR REPLACE INTO developers (user_id, permissions) VALUES (?, ?)", (dev_id, perms))
                 await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
-                await message.reply_text(f"✅ تم إضافة المطور `{dev_id}` بنجاح بصلاحيات: `{perms}`", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إدارة المطورين", callback_data="admin_devs_panel")]]))
+                await message.reply_text(f"✅ تم إضافة المطور `{dev_id}` بنجاح بصلاحيات: `{perms}`", reply_markup=InlineKeyboardMarkup([[StyledButton("🔙 إدارة المطورين", callback_data="admin_devs_panel")]]))
             except Exception:
                 await message.reply_text("❌ صيغة خاطئة! أرسل: `الآيدي الصلاحية`")
 
@@ -921,20 +928,20 @@ def setup_handlers(bot_app):
             dev_id = message.text.strip().replace("@", "")
             await db_exec("DELETE FROM developers WHERE user_id = ?", (dev_id,))
             await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
-            await message.reply_text(f"✅ تم حذف المطور `{dev_id}` بنجاح.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إدارة المطورين", callback_data="admin_devs_panel")]]))
+            await message.reply_text(f"✅ تم حذف المطور `{dev_id}` بنجاح.", reply_markup=InlineKeyboardMarkup([[StyledButton("🔙 إدارة المطورين", callback_data="admin_devs_panel")]]))
 
         elif state == "admin_edit_welcome":
             if not admin_flag: return
             await set_setting("welcome_msg", message.text)
             await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
-            await message.reply_text("✅ تم حفظ الرسالة الترحيبية الجديدة بنجاح!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 تعديل البوت", callback_data="admin_edit_bot")]]))
+            await message.reply_text("✅ تم حفظ الرسالة الترحيبية الجديدة بنجاح!", reply_markup=InlineKeyboardMarkup([[StyledButton("🔙 تعديل البوت", callback_data="admin_edit_bot")]]))
 
         elif state.startswith("admin_edit_btn_"):
             if not admin_flag: return
             btn_key = state.replace("admin_edit_btn_", "")
             await set_setting(f"btn_{btn_key}", message.text.strip())
             await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
-            await message.reply_text("✅ تم تغيير اسم الزر بنجاح!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 تعديل البوت", callback_data="admin_edit_bot")]]))
+            await message.reply_text("✅ تم تغيير اسم الزر بنجاح!", reply_markup=InlineKeyboardMarkup([[StyledButton("🔙 تعديل البوت", callback_data="admin_edit_bot")]]))
 
         elif state == "waiting_for_code":
             code_input = message.text.strip()
@@ -965,7 +972,7 @@ def setup_handlers(bot_app):
                 await db_exec("INSERT INTO codes (code, days, max_uses) VALUES (?, ?, ?)", (code, days, max_u))
                 await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
                 await message.reply_text(f"✅ تم إنشاء الكود `{code}` بنجاح لمُدة `{days}` يوماً لعدد `{max_u}` مستخدمين!", 
-                                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 للوحة الأدمن", callback_data="admin_panel")]]))
+                                         reply_markup=InlineKeyboardMarkup([[StyledButton("🔙 للوحة الأدمن", callback_data="admin_panel")]]))
             except Exception:
                 await message.reply_text("❌ صيغة خاطئة. يرجى إرسالها كالتالي:\n`VIP2026 30 5`")
 
@@ -985,7 +992,7 @@ def setup_handlers(bot_app):
                 await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
                 
                 await message.reply_text(f"✅ تم تفعيل رتبة Pro للمستخدم `{actual_id}` لمدة {days} يوم!", 
-                                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إدارة Pro", callback_data="admin_manage_pro")]]))
+                                         reply_markup=InlineKeyboardMarkup([[StyledButton("🔙 إدارة Pro", callback_data="admin_manage_pro")]]))
             except Exception:
                 await message.reply_text("❌ صيغة خاطئة. ارسل: `آيدي/يوزر الأيام` (مثال: `123456789 30`)")
 
@@ -1001,7 +1008,7 @@ def setup_handlers(bot_app):
             await db_exec("UPDATE users SET is_pro = 0, pro_expires_at = 0 WHERE user_id = ?", (actual_id,))
             await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
             await message.reply_text(f"✅ تم سحب رتبة Pro من المستخدم `{actual_id}` بنجاح.", 
-                                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 إدارة Pro", callback_data="admin_manage_pro")]]))
+                                     reply_markup=InlineKeyboardMarkup([[StyledButton("🔙 إدارة Pro", callback_data="admin_manage_pro")]]))
 
         elif state.startswith("admin_bc_"):
             if not admin_flag: return
@@ -1172,7 +1179,7 @@ def setup_handlers(bot_app):
             await db_exec("UPDATE users SET state = NULL WHERE user_id = ?", (user_id,))
             await message.reply_text("✅ **تم حفظ الرسالة بنجاح!**", reply_markup=back_menu())
 
-# --- التشغيل الرئيسي النظام ---
+# --- التشغيل الرئيسي للنظام ---
 async def main():
     global app
     init_db()
