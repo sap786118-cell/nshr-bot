@@ -27,8 +27,8 @@ class StyledButton(InlineKeyboardButton):
         if style:
             self.style = style
 
-    def write(self):
-        btn = super().write()
+    async def write(self, client):
+        btn = await super().write(client)
         if hasattr(self, "style") and self.style:
             btn["style"] = self.style
         return btn
