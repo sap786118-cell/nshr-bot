@@ -1,4 +1,4 @@
-hydrogram
+pyrogram
 tgcrypto
 aiohttp
 cryptography
