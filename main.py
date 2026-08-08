@@ -20,18 +20,10 @@ from pyrogram.errors import (
 )
 from pyrogram.enums import ChatMemberStatus, ChatType, ChatAction
 
-# --- كلاس خاص لدعم تلوين الأزرار المحدث بدون أخطاء ---
+# --- كلاس الأزرار المعتمد ---
 class StyledButton(InlineKeyboardButton):
     def __init__(self, text, callback_data=None, url=None, style=None, **kwargs):
         super().__init__(text, callback_data=callback_data, url=url, **kwargs)
-        if style:
-            self.style = style
-
-    async def write(self, client):
-        btn = await super().write(client)
-        if hasattr(self, "style") and self.style:
-            btn["style"] = self.style
-        return btn
 
 # --- إعداد التسجيل والأخطاء ---
 logging.basicConfig(
